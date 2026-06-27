@@ -20,4 +20,7 @@ log.txt
 .DS_Store
 .vs
 compile-commands.json
+__pycache__
 
+.claude
+CLAUDE.md
