@@ -123,7 +123,7 @@
                     "numoutlets": 5,
                     "outlettype": [ "signal", "signal", "signal", "", "dictionary" ],
                     "parameter_enable": 0,
-                    "patching_rect": [ 18.0, 171.0, 150.0, 30.0 ],
+                    "patching_rect": [ 18.0, 206.0, 150.0, 30.0 ],
                     "quality": "basic",
                     "saved_attribute_attributes": {
                         "candicane2": {
@@ -177,12 +177,12 @@
             {
                 "box": {
                     "id": "obj-2",
-                    "linecount": 2,
+                    "linecount": 10,
                     "maxclass": "comment",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 20.0, 38.0, 600.0, 33.0 ],
-                    "text": "Per-voice control messages take <voice> <value>. Record a tone into voice 0, then loop-play it. Voice outlets 0-5 are dry; outlets 6/7 are the panned stereo mix; outlet 8 reports phase/position."
+                    "patching_rect": [ 20.0, 48.0, 224.0, 141.0 ],
+                    "text": "Per-voice control messages take <voice> <value>. This instance has 6 voices (the second argument). Each voice has a record-input inlet and a dry signal output; the rightmost outlet reports phase/position (poll / @report). There is no stereo mix — sum or pan the voice outputs downstream. Load a sample into the buffer~ (or record into a voice), then loop-play."
                 }
             },
             {
@@ -203,7 +203,7 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 171.0, 171.0, 80.0, 22.0 ],
+                    "patching_rect": [ 256.0, 171.0, 80.0, 22.0 ],
                     "text": "set skbuf"
                 }
             },

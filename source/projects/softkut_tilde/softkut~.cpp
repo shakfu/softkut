@@ -3,9 +3,9 @@
 // Thin Max shell over softkut::Engine (../../include/softkut_engine.h), which
 // owns the softcut voices, the lock-free command queue, the double<->float
 // conversion, the power-of-two buffer framing, and the per-voice output
-// level/pan ramps + stereo mix. This file owns only Max plumbing: inlets/
-// outlets, the per-voice buffer~ references, message parsing, the phase-report
-// clock, and the perform call.
+// level. This file owns only Max plumbing: inlets/outlets, the per-voice
+// buffer~ references, message parsing, the phase-report clock, and the perform
+// call.
 //
 // Topology: a runtime voice count set by the second creation argument
 // (channels, default 1, max NumVoices=6). One signal inlet (record input) and
@@ -30,9 +30,11 @@
 static const int NumVoices = 6;             // compile-time maximum (array sizing)
 typedef softkut::Engine<NumVoices> t_engine;
 
-// Signal outlets are laid out: nvoices voice outputs, then mix L, then mix R
-// (mix outlet indices are runtime = nvoices, nvoices+1); the message outlet is
-// created last.
+// Outlet order (Max creates outlets right-to-left, so first created = rightmost):
+// the message/report outlet is created FIRST (rightmost, the conventional data-
+// outlet position), then one signal outlet per voice. The message outlet is not
+// part of perform's outs[] array, so the voice outlets are still indexed
+// 0..nvoices-1 there (voiceOuts[v] = outs[v]).
 
 typedef struct _softkut {
     t_pxobject     ob;          // MSP object header (must be first)
@@ -275,8 +277,8 @@ void *softkut_new(t_symbol *s, long argc, t_atom *argv)
 
     dsp_setup((t_pxobject *)x, nvoices);            // one record-input inlet per voice
 
-    // one signal outlet per voice (line up with the perform outs[] array); the
-    // message outlet is created last.
+    // message/report outlet first (-> rightmost), then one signal outlet per
+    // voice (these line up with perform's outs[] in voice order).
     x->reportout = outlet_new(x, NULL);
     for (int i = 0; i < nvoices; ++i)
         outlet_new(x, "signal");
