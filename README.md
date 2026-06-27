@@ -4,8 +4,8 @@ A Max/MSP external wrapping monome's [softcut-lib](https://github.com/monome/sof
 real-time audio buffer looping/resampling engine from the [norns](https://monome.org/norns/) sound
 computer. `softkut~` exposes 6 independent softcut voices that read and write a shared (or
 per-voice) Max `buffer~`, with sub-sample looping, crossfaded overdub, resampling read/write heads,
-per-voice input and output multimode filters, a per-voice level/pan stereo mix, and voice-to-voice
-plus inlet-to-voice routing matrices.
+per-voice input and output multimode filters, per-voice output level, and voice-to-voice plus
+inlet-to-voice routing matrices.
 
 The DSP lives in a host-agnostic engine (`source/include/softkut_engine.h`); this Max external is a
 thin shell over it. Control messages are marshalled to the audio thread through a lock-free
@@ -31,12 +31,16 @@ is also a standard CMake project (`cmake .. && cmake --build .`).
 ## The object
 
 ```
-[softkut~ <buffer~ name> @report <ms>]
+[softkut~ <buffer~ name> <channels> @report <ms>]
 ```
 
-- **Inlets** (6 signals): voice 0..5 record inputs. Control messages go to the **left inlet**.
-- **Outlets**: `0..5` = per-voice signal outputs · `6` = stereo mix L · `7` = stereo mix R ·
-  `8` = message outlet (phase/position reports).
+`<channels>` is the voice count — default **1** (mono), maximum **6** — and sets how many signal
+inlets and outlets the object has. So `[softkut~ skbuf]` is a one-voice mono looper; `[softkut~ skbuf 4]`
+has four voices.
+
+- **Inlets** (N signals): one record input per voice (voice 0..N-1). Control messages go to the
+  **left inlet**.
+- **Outlets**: `0..N-1` = per-voice signal outputs · `N` = message outlet (phase/position reports).
 
 All voices share the `buffer~` named in the first argument (or via `set`). Each voice can instead
 be pointed at its own `buffer~` with `voicebuf` (e.g. for stereo: voice 0 -> left, voice 1 -> right).
@@ -108,14 +112,16 @@ is `0..5`. Times are in **seconds**, gains/levels are linear amplitudes, flags a
 | `postlp` `posthp` `postbp` `postbr` | `<voice> <mix>` | Low-pass / high-pass / band-pass / band-reject mix amounts. |
 | `postdry` | `<voice> <amp>` | Dry (unfiltered) playback mix. |
 
-### Output mix (per-voice level and pan into the stereo mix outlets 6/7)
+### Output level
 
 | Message | Args | Description |
 |---|---|---|
-| `level` | `<voice> <amp>` | Voice output gain (scales both the per-voice outlet and the mix). Smoothed. |
-| `pan` | `<voice> <-1..1>` | Equal-power pan into the stereo mix. `-1` = left, `0` = centre, `1` = right. Smoothed. |
+| `level` | `<voice> <amp>` | Voice output gain. Smoothed. |
 | `levelslew` | `<voice> <sec>` | Smoothing time for `level`. |
-| `panslew` | `<voice> <sec>` | Smoothing time for `pan`. |
+
+Neither object has a built-in stereo mix outlet — each voice is its own output. `pan`/`panslew` are
+still accepted (shared command set) but have **no effect**; do stereo placement downstream by routing
+the voice outputs to L/R yourself, or by panning an `mc.softkut~` bundle with `mc.*~` objects.
 
 ### Slew (parameter smoothing inside softcut)
 
@@ -157,7 +163,7 @@ src ( voiceOutput[src] * feedback[src][voice] )`.
 
 | Message | Args | Description |
 |---|---|---|
-| `reset` | — | Reset all voices and routing to defaults (rate 1, 1 s loop, looping on, level 1, pan centre, no feedback, identity input routing). |
+| `reset` | — | Reset all voices and routing to defaults (rate 1, 1 s loop, looping on, level 1, no feedback, identity input routing). |
 
 ### Attributes
 
@@ -180,12 +186,13 @@ rec 0 1  ,  play 0 1              (record while monitoring)
 rec 0 0                           (stop recording, keep looping)
 ```
 
-**Stereo** — two voices, two mono buffers, panned hard L/R:
+**Stereo** — a two-voice instance, each voice on its own buffer and output; route
+outlet 0 to the left channel and outlet 1 to the right:
 
 ```
 [buffer~ bufL 2000]   [buffer~ bufR 2000]
+[softkut~ skbuf 2]                 (2 voices -> outlets 0 and 1)
 voicebuf 0 bufL  ,  voicebuf 1 bufR
-pan 0 -1  ,  pan 1 1
 ```
 
 **Feedback overdub** — feed voice 0 into voice 1 to build layers:

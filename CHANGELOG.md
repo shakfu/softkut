@@ -14,9 +14,11 @@ multichannel variant, built on a shared host-agnostic engine.
 
 #### `softkut~` external
 
-- Six softcut voices reading/writing a shared (or per-voice) mono `buffer~`,
-  zero-copy: voices point directly at the locked `buffer~` samples each perform
-  block. One signal inlet (record input) and one signal outlet per voice.
+- A variable number of softcut voices (the optional `<channels>` creation
+  argument, default 1, max 6) reading/writing a shared (or per-voice) mono
+  `buffer~`, zero-copy: voices point directly at the locked `buffer~` samples
+  each perform block. One signal inlet (record input) and one signal outlet per
+  voice, plus the stereo-mix pair and a report outlet.
 - Full per-voice control surface: `rate`, `loopstart`, `loopend`, `loop`,
   `fade`, `reclevel`, `prelevel`, `rec`, `play`, `reconce`, `position`,
   `recoffset`, `stop`.

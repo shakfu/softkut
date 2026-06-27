@@ -224,7 +224,10 @@ public:
 
         if (nframes > kMaxBlock) nframes = kMaxBlock;   // guard scratch bounds
 
-        for (int i = 0; i < nframes; ++i) { mixLf_[i] = 0.f; mixRf_[i] = 0.f; }
+        // the equal-power pan mix is only computed when a host actually wants it
+        const bool wantMix = (mixL != nullptr || mixR != nullptr);
+        if (wantMix)
+            for (int i = 0; i < nframes; ++i) { mixLf_[i] = 0.f; mixRf_[i] = 0.f; }
 
         // prevOut holds last block's raw voice outputs (feedback source, one
         // block delayed); curOut receives this block's raw outputs. We read
@@ -257,15 +260,17 @@ public:
             // retain raw output for next block's feedback
             for (int i = 0; i < nframes; ++i) curOut[dst][i] = outScratch_[i];
 
-            // per-voice level (gain) + equal-power pan into the stereo mix
+            // per-voice level (gain), and optional equal-power pan into the mix
             double *out = voiceOuts[dst];
             for (int i = 0; i < nframes; ++i) {
                 const float lv = outLevel_[dst].update();
-                const float pv = outPan_[dst].update();          // [0,1]
                 const float s  = outScratch_[i] * lv;
                 out[i] = static_cast<double>(s);
-                mixLf_[i] += s * std::cos(pv * kHalfPi);
-                mixRf_[i] += s * std::sin(pv * kHalfPi);
+                if (wantMix) {
+                    const float pv = outPan_[dst].update();      // [0,1]
+                    mixLf_[i] += s * std::cos(pv * kHalfPi);
+                    mixRf_[i] += s * std::sin(pv * kHalfPi);
+                }
             }
         }
         outCur_ ^= 1;   // this block's curOut becomes next block's prevOut

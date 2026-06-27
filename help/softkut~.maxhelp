@@ -9,7 +9,7 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 165.0, 298.0, 640.0, 620.0 ],
+        "rect": [ 165.0, 246.0, 640.0, 620.0 ],
         "boxes": [
             {
                 "box": {
@@ -30,7 +30,7 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 257.0, 84.0, 126.0, 76.0 ],
+                    "patching_rect": [ 257.0, 84.0, 127.0, 76.0 ],
                     "text": "prelevel 0 0.75, reclevel 0 1, recpreslew 0 0.05, loop 0 1, rec 0 1, play 0 1"
                 }
             },
@@ -354,10 +354,10 @@
                 "box": {
                     "id": "obj-sk",
                     "maxclass": "newobj",
-                    "numinlets": 6,
-                    "numoutlets": 9,
-                    "outlettype": [ "", "signal", "signal", "signal", "signal", "signal", "signal", "signal", "signal" ],
-                    "patching_rect": [ 18.0, 357.0, 320.0, 22.0 ],
+                    "numinlets": 1,
+                    "numoutlets": 2,
+                    "outlettype": [ "signal", "" ],
+                    "patching_rect": [ 18.0, 357.0, 153.0, 22.0 ],
                     "text": "softkut~ skbuf @report 100"
                 }
             },
@@ -367,7 +367,7 @@
                     "maxclass": "ezdac~",
                     "numinlets": 2,
                     "numoutlets": 0,
-                    "patching_rect": [ 243.0, 412.0, 45.0, 45.0 ]
+                    "patching_rect": [ 18.0, 417.0, 45.0, 45.0 ]
                 }
             },
             {
@@ -376,7 +376,7 @@
                     "maxclass": "scope~",
                     "numinlets": 2,
                     "numoutlets": 0,
-                    "patching_rect": [ 319.0, 477.0, 200.0, 130.0 ]
+                    "patching_rect": [ 147.0, 461.0, 200.0, 130.0 ]
                 }
             },
             {
@@ -385,7 +385,7 @@
                     "maxclass": "newobj",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 23.0, 477.0, 90.0, 22.0 ],
+                    "patching_rect": [ 152.0, 417.0, 90.0, 22.0 ],
                     "text": "print report"
                 }
             }
@@ -544,19 +544,28 @@
             {
                 "patchline": {
                     "destination": [ "obj-dac", 1 ],
-                    "source": [ "obj-sk", 7 ]
+                    "order": 1,
+                    "source": [ "obj-sk", 0 ]
                 }
             },
             {
                 "patchline": {
                     "destination": [ "obj-dac", 0 ],
-                    "source": [ "obj-sk", 6 ]
+                    "order": 2,
+                    "source": [ "obj-sk", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-print", 0 ],
+                    "source": [ "obj-sk", 1 ]
                 }
             },
             {
                 "patchline": {
                     "destination": [ "obj-scope", 0 ],
-                    "source": [ "obj-sk", 8 ]
+                    "order": 0,
+                    "source": [ "obj-sk", 0 ]
                 }
             }
         ],

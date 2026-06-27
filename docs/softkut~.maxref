@@ -11,7 +11,7 @@
 		softkut~ wraps monome's softcut-lib (the norns looping engine). It provides six independent
 		voices that read and write a shared (or per-voice) mono buffer~, with sub-sample looping,
 		crossfaded overdub, resampling read/write heads, per-voice input and output multimode
-		filters, a per-voice level/pan stereo mix, and inlet-to-voice and voice-to-voice routing
+		filters, per-voice output level, and inlet-to-voice and voice-to-voice routing
 		matrices. Most messages address a single voice as &lt;voice&gt; in the range 0-5; times are
 		in seconds. The buffer~ must be mono, and only its largest power-of-two prefix is used.
 	</description>
@@ -87,15 +87,7 @@
 			<digest>Voice 5 output</digest>
 			<description>Voice 5 playback output.</description>
 		</outlet>
-		<outlet id="6" type="signal">
-			<digest>Stereo mix left</digest>
-			<description>Equal-power panned sum of all voices (left channel).</description>
-		</outlet>
-		<outlet id="7" type="signal">
-			<digest>Stereo mix right</digest>
-			<description>Equal-power panned sum of all voices (right channel).</description>
-		</outlet>
-		<outlet id="8" type="list">
+		<outlet id="6" type="list">
 			<digest>Phase / position reports</digest>
 			<description>
 				Emits "position &lt;p0&gt; ... &lt;p5&gt;" in response to a poll message, and (when the
@@ -112,8 +104,16 @@
 		<objarg name="buffer-name" optional="1" type="symbol">
 			<digest>Name of the shared mono buffer~</digest>
 			<description>
-				Sets the mono buffer~ that all six voices read and write. Can be changed later with
+				Sets the mono buffer~ that all voices read and write. Can be changed later with
 				the set message, or overridden per voice with voicebuf.
+			</description>
+		</objarg>
+		<objarg name="channels" optional="1" type="int">
+			<digest>Voice count (default 1, max 6)</digest>
+			<description>
+				Number of voices, which sets the number of signal inlets (record inputs) and
+				outlets. Defaults to 1 (mono); clamped to the range 1-6. The inlet/outlet list
+				shown here is for the maximum of 6 voices.
 			</description>
 		</objarg>
 	</objarglist>
@@ -392,7 +392,7 @@
 				<arg name="amp" type="float" optional="0" />
 			</arglist>
 			<digest>Set voice output level</digest>
-			<description>Voice output gain, scaling both the per-voice outlet and the stereo mix. Smoothed.</description>
+			<description>Voice output gain. Smoothed.</description>
 		</method>
 
 		<method name="pan">
@@ -400,8 +400,8 @@
 				<arg name="voice" type="int" optional="0" />
 				<arg name="position" type="float" optional="0" />
 			</arglist>
-			<digest>Set voice pan</digest>
-			<description>Equal-power pan into the stereo mix: -1 left, 0 centre, 1 right. Smoothed.</description>
+			<digest>Set voice pan (no effect)</digest>
+			<description>Accepted for compatibility but has no effect: there is no built-in stereo mix outlet. Do stereo placement downstream by routing the voice outputs yourself.</description>
 		</method>
 
 		<method name="levelslew">
@@ -418,8 +418,8 @@
 				<arg name="voice" type="int" optional="0" />
 				<arg name="seconds" type="float" optional="0" />
 			</arglist>
-			<digest>Set pan smoothing time</digest>
-			<description>Smoothing (slew) time in seconds for the pan message.</description>
+			<digest>Set pan smoothing time (no effect)</digest>
+			<description>Accepted for compatibility but has no effect (see pan).</description>
 		</method>
 
 		<method name="recpreslew">

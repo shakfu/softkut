@@ -7,10 +7,10 @@
 // outlets, the per-voice buffer~ references, message parsing, the phase-report
 // clock, and the perform call.
 //
-// Topology: NumVoices voices, one signal inlet (record input) and one signal
-// outlet (playback) per voice, plus a stereo mix pair (L/R) carrying the
-// equal-power panned sum of all voices, plus a trailing message outlet for
-// phase/position reports.
+// Topology: a runtime voice count set by the second creation argument
+// (channels, default 1, max NumVoices=6). One signal inlet (record input) and
+// one signal outlet (playback) per voice, plus a trailing message outlet for
+// phase/position reports. (No stereo mix outlet -- pan downstream if needed.)
 //
 // Buffer model (zero-copy): each voice points at the locked
 // samples of its own mono buffer~ (defaulting to the shared name; override per
@@ -27,19 +27,17 @@
 #include "softkut_control.h"   // shared command table + dispatch (pulls in engine)
 
 // ---------------------------------------------------------------------------
-static const int NumVoices = 6;
+static const int NumVoices = 6;             // compile-time maximum (array sizing)
 typedef softkut::Engine<NumVoices> t_engine;
 
-// outlet index layout (signal outlets first, message outlet last)
-enum {
-    OUT_MIX_L = NumVoices,        // 6
-    OUT_MIX_R = NumVoices + 1,    // 7
-    NUM_SIGNAL_OUTLETS = NumVoices + 2
-};
+// Signal outlets are laid out: nvoices voice outputs, then mix L, then mix R
+// (mix outlet indices are runtime = nvoices, nvoices+1); the message outlet is
+// created last.
 
 typedef struct _softkut {
     t_pxobject     ob;          // MSP object header (must be first)
     t_engine      *engine;      // host-agnostic DSP engine (heap: needs C++ ctor)
+    long           nvoices;     // active voice count (1..NumVoices, creation arg)
 
     t_buffer_ref  *vbuf[NumVoices];     // per-voice buffer~ reference
     t_symbol      *vbufname[NumVoices]; // per-voice buffer~ name
@@ -98,9 +96,9 @@ void softkut_reset(t_softkut *x)
 void softkut_poll(t_softkut *x)
 {
     t_atom a[NumVoices];
-    for (int v = 0; v < NumVoices; ++v)
+    for (int v = 0; v < x->nvoices; ++v)
         atom_setfloat(a + v, x->engine->getSavedPosition(v));
-    outlet_anything(x->reportout, ps_position, NumVoices, a);
+    outlet_anything(x->reportout, ps_position, (short)x->nvoices, a);
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +112,7 @@ void softkut_set(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
     t_symbol *name = atom_getsym(argv);
-    for (int v = 0; v < NumVoices; ++v) { x->vbufname[v] = name; ensure_vbuf(x, v); }
+    for (int v = 0; v < x->nvoices; ++v) { x->vbufname[v] = name; ensure_vbuf(x, v); }
     x->monoWarned = false;
     if (!buffer_ref_getobject(x->vbuf[0]))
         object_warn((t_object *)x, "set: no buffer~ named %s", name->s_name);
@@ -128,8 +126,8 @@ void softkut_voicebuf(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
     long v = atom_getlong(argv);
-    if (v < 0 || v >= NumVoices) {
-        object_error((t_object *)x, "voicebuf: voice %ld out of range [0..%d]", v, NumVoices - 1);
+    if (v < 0 || v >= x->nvoices) {
+        object_error((t_object *)x, "voicebuf: voice %ld out of range [0..%ld]", v, x->nvoices - 1);
         return;
     }
     x->vbufname[v] = atom_getsym(argv + 1);
@@ -143,10 +141,10 @@ void softkut_voicebuf(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
 void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
                        double **outs, long nouts, long vec, long flags, void *usr)
 {
+    const int nv = (int)x->nvoices;
     double *voiceOuts[NumVoices];
-    for (int v = 0; v < NumVoices; ++v) voiceOuts[v] = outs[v];
-    double *mixL = (nouts > OUT_MIX_L) ? outs[OUT_MIX_L] : NULL;
-    double *mixR = (nouts > OUT_MIX_R) ? outs[OUT_MIX_R] : NULL;
+    for (int v = 0; v < nv; ++v) voiceOuts[v] = outs[v];
+    double *mixL = NULL, *mixR = NULL;   // no stereo-mix outlets (pan downstream)
 
     // Resolve each voice's buffer~ and lock the distinct ones exactly once
     // (several voices may share a buffer~).
@@ -156,7 +154,7 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
     float        *samps[NumVoices];
     size_t        frames[NumVoices];
 
-    for (int v = 0; v < NumVoices; ++v) {
+    for (int v = 0; v < nv; ++v) {
         samps[v] = NULL; frames[v] = 0;
         t_buffer_obj *b = x->vbuf[v] ? buffer_ref_getobject(x->vbuf[v]) : NULL;
         if (!b) continue;
@@ -183,7 +181,7 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
     x->engine->process(ins, voiceOuts, (int)vec, samps, frames, mixL, mixR);
 
     // mark recorded-into buffers dirty, then release all locks
-    for (int v = 0; v < NumVoices; ++v)
+    for (int v = 0; v < nv; ++v)
         if (samps[v] && x->engine->getEnabled(v) && x->engine->getRecFlag(v))
             buffer_setdirty(buffer_ref_getobject(x->vbuf[v]));
     for (int k = 0; k < nlocked; ++k)
@@ -196,7 +194,7 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
 void softkut_clock(t_softkut *x)
 {
     if (x->report <= 0) return;
-    for (int v = 0; v < NumVoices; ++v) {
+    for (int v = 0; v < x->nvoices; ++v) {
         if (x->engine->checkQuantPhaseChanged(v)) {
             t_atom a[2];
             atom_setlong (a + 0, v);
@@ -216,7 +214,7 @@ void softkut_dsp64(t_softkut *x, t_object *dsp64, short *count, double srate,
 {
     x->engine->setSampleRate(srate);
 
-    for (int v = 0; v < NumVoices; ++v) ensure_vbuf(x, v);
+    for (int v = 0; v < x->nvoices; ++v) ensure_vbuf(x, v);
 
     // inform the user once if voice 0's buffer~ length is being reduced
     t_buffer_obj *b0 = x->vbuf[0] ? buffer_ref_getobject(x->vbuf[0]) : NULL;
@@ -255,12 +253,8 @@ void softkut_assist(t_softkut *x, void *b, long m, long a, char *s)
     if (m == ASSIST_INLET) {
         snprintf_zero(s, 256, (a == 0) ? "(signal) Voice 0 record input / messages"
                                        : "(signal) Voice %ld record input", a);
-    } else if (a < NumVoices) {
+    } else if (a < x->nvoices) {
         snprintf_zero(s, 256, "(signal) Voice %ld output", a);
-    } else if (a == OUT_MIX_L) {
-        snprintf_zero(s, 256, "(signal) Stereo mix L");
-    } else if (a == OUT_MIX_R) {
-        snprintf_zero(s, 256, "(signal) Stereo mix R");
     } else {
         snprintf_zero(s, 256, "(list) Phase / position reports");
     }
@@ -271,20 +265,28 @@ void *softkut_new(t_symbol *s, long argc, t_atom *argv)
     t_softkut *x = (t_softkut *)object_alloc(softkut_class);
     if (!x) return NULL;
 
-    dsp_setup((t_pxobject *)x, NumVoices);          // NumVoices signal inlets
+    // args: [buffer~ name] [channels]. channels = voice count, default 1 (mono),
+    // clamped to [1, NumVoices].
+    t_symbol *name    = (argc > 0 && atom_gettype(argv) == A_SYM)      ? atom_getsym(argv)      : NULL;
+    long      nvoices = (argc > 1 && atom_gettype(argv + 1) == A_LONG) ? atom_getlong(argv + 1) : 1;
+    if (nvoices < 1) nvoices = 1;
+    if (nvoices > NumVoices) nvoices = NumVoices;
+    x->nvoices = nvoices;
 
-    // Signal outlets first (indices 0..NUM_SIGNAL_OUTLETS-1) so they line up
-    // with the perform outs[] array; the message outlet is created last.
-    for (int i = 0; i < NUM_SIGNAL_OUTLETS; ++i)
-        outlet_new(x, "signal");
+    dsp_setup((t_pxobject *)x, nvoices);            // one record-input inlet per voice
+
+    // one signal outlet per voice (line up with the perform outs[] array); the
+    // message outlet is created last.
     x->reportout = outlet_new(x, NULL);
+    for (int i = 0; i < nvoices; ++i)
+        outlet_new(x, "signal");
 
     x->engine     = new t_engine();
+    x->engine->setNumVoices((int)nvoices);
     x->monoWarned = false;
     x->report     = 0;
     x->tclock     = clock_new((t_object *)x, (method)softkut_clock);
 
-    t_symbol *name = (argc > 0 && atom_gettype(argv) == A_SYM) ? atom_getsym(argv) : NULL;
     for (int v = 0; v < NumVoices; ++v) { x->vbuf[v] = NULL; x->vbufname[v] = name; }
 
     attr_args_process(x, (short)argc, argv);
