@@ -1,10 +1,9 @@
 {
-    "name": "max-template",
-	"author" : "",
-	"description" : "An example Max package",
-	"homepatcher" : "",
+	"name" : "softkut",
+	"author" : "Shakeeb Alireza",
+	"description" : "softkut~ : a Max/MSP external wrapping monome's softcut-lib (6-voice buffer looper)",
+	"homepatcher" : "softkut~.maxhelp",
 	"max_version_min" : "8.0", "max_version_max" : "none",
-	"name" : "max-template",
 	"os" : {
 		"macintosh" : {
 			"platform" : [ "x64", "arm64" ],
@@ -16,10 +15,9 @@
 		}
 	},
 	"package_extra" : {
-		"reverse_domain" : "com.your.name",
-		"copyright" : "Copyright (c) 2021 Your Name"
+		"reverse_domain" : "org.shakfu.softkut"
 	},
-	"tags" : ["max", "example"],
+	"tags" : ["max", "msp", "softcut", "looper", "buffer"],
 	"version" : "0.1.0",
-	"website" : "http://www.github.com/"
+	"website" : "http://www.github.com/shakfu/softkut"
 }

@@ -1,0 +1,558 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name='softkut~' module='msp' category='MSP Sampling'>
+
+	<digest>
+		Six-voice softcut-lib buffer looper
+	</digest>
+
+	<description>
+		softkut~ wraps monome's softcut-lib (the norns looping engine). It provides six independent
+		voices that read and write a shared (or per-voice) mono buffer~, with sub-sample looping,
+		crossfaded overdub, resampling read/write heads, per-voice input and output multimode
+		filters, a per-voice level/pan stereo mix, and inlet-to-voice and voice-to-voice routing
+		matrices. Most messages address a single voice as &lt;voice&gt; in the range 0-5; times are
+		in seconds. The buffer~ must be mono, and only its largest power-of-two prefix is used.
+	</description>
+
+
+	<!--METADATA-->
+
+	<metadatalist>
+		<metadata name='author'>Shakeeb Alireza</metadata>
+		<metadata name='tag'>MSP</metadata>
+		<metadata name='tag'>MSP Sampling</metadata>
+		<metadata name='tag'>softcut</metadata>
+	</metadatalist>
+
+
+	<!--INLETS-->
+
+	<inletlist>
+		<inlet id="0" type="signal">
+			<digest>Voice 0 record input / control messages</digest>
+			<description>
+				Signal record input for voice 0. All control messages are also sent to this (left)
+				inlet.
+			</description>
+		</inlet>
+		<inlet id="1" type="signal">
+			<digest>Voice 1 record input</digest>
+			<description>Signal record input for voice 1.</description>
+		</inlet>
+		<inlet id="2" type="signal">
+			<digest>Voice 2 record input</digest>
+			<description>Signal record input for voice 2.</description>
+		</inlet>
+		<inlet id="3" type="signal">
+			<digest>Voice 3 record input</digest>
+			<description>Signal record input for voice 3.</description>
+		</inlet>
+		<inlet id="4" type="signal">
+			<digest>Voice 4 record input</digest>
+			<description>Signal record input for voice 4.</description>
+		</inlet>
+		<inlet id="5" type="signal">
+			<digest>Voice 5 record input</digest>
+			<description>Signal record input for voice 5.</description>
+		</inlet>
+	</inletlist>
+
+
+	<!--OUTLETS-->
+
+	<outletlist>
+		<outlet id="0" type="signal">
+			<digest>Voice 0 output</digest>
+			<description>Voice 0 playback output (post level, pre pan).</description>
+		</outlet>
+		<outlet id="1" type="signal">
+			<digest>Voice 1 output</digest>
+			<description>Voice 1 playback output.</description>
+		</outlet>
+		<outlet id="2" type="signal">
+			<digest>Voice 2 output</digest>
+			<description>Voice 2 playback output.</description>
+		</outlet>
+		<outlet id="3" type="signal">
+			<digest>Voice 3 output</digest>
+			<description>Voice 3 playback output.</description>
+		</outlet>
+		<outlet id="4" type="signal">
+			<digest>Voice 4 output</digest>
+			<description>Voice 4 playback output.</description>
+		</outlet>
+		<outlet id="5" type="signal">
+			<digest>Voice 5 output</digest>
+			<description>Voice 5 playback output.</description>
+		</outlet>
+		<outlet id="6" type="signal">
+			<digest>Stereo mix left</digest>
+			<description>Equal-power panned sum of all voices (left channel).</description>
+		</outlet>
+		<outlet id="7" type="signal">
+			<digest>Stereo mix right</digest>
+			<description>Equal-power panned sum of all voices (right channel).</description>
+		</outlet>
+		<outlet id="8" type="list">
+			<digest>Phase / position reports</digest>
+			<description>
+				Emits "position &lt;p0&gt; ... &lt;p5&gt;" in response to a poll message, and (when the
+				report attribute is non-zero) "phase &lt;voice&gt; &lt;quantphase&gt;" whenever a voice's
+				quantized phase changes.
+			</description>
+		</outlet>
+	</outletlist>
+
+
+	<!--ARGUMENTS-->
+
+	<objarglist>
+		<objarg name="buffer-name" optional="1" type="symbol">
+			<digest>Name of the shared mono buffer~</digest>
+			<description>
+				Sets the mono buffer~ that all six voices read and write. Can be changed later with
+				the set message, or overridden per voice with voicebuf.
+			</description>
+		</objarg>
+	</objarglist>
+
+
+	<!--MESSAGES-->
+
+	<methodlist>
+
+		<method name="play">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="flag" type="int" optional="0" />
+			</arglist>
+			<digest>Enable/disable playback for a voice</digest>
+			<description>1 starts reading (playback) for the voice; 0 stops it.</description>
+		</method>
+
+		<method name="rec">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="flag" type="int" optional="0" />
+			</arglist>
+			<digest>Enable/disable recording for a voice</digest>
+			<description>1 starts writing (recording) into the buffer for the voice; 0 stops it.</description>
+		</method>
+
+		<method name="reconce">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="flag" type="int" optional="0" />
+			</arglist>
+			<digest>Record a single loop pass</digest>
+			<description>When set, the voice records one loop pass then auto-clears its record flag.</description>
+		</method>
+
+		<method name="stop">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+			</arglist>
+			<digest>Immediately park a voice's heads</digest>
+			<description>Hard-stops both subheads (silent), distinct from play 0 which fades the transport.</description>
+		</method>
+
+		<method name="position">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Jump the play head to a position</digest>
+			<description>Cuts the voice's play head to the given position in seconds within the buffer.</description>
+		</method>
+
+		<method name="enable">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="flag" type="int" optional="0" />
+			</arglist>
+			<digest>Master on/off gate for a voice</digest>
+			<description>
+				When off (0), the voice is skipped entirely: no audio output, no recording, and no
+				feedback contribution. Default is on.
+			</description>
+		</method>
+
+		<method name="rate">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="ratio" type="float" optional="0" />
+			</arglist>
+			<digest>Set playback/record rate</digest>
+			<description>1 = normal, 0.5 = half speed (octave down), 2 = double, negative = reverse.</description>
+		</method>
+
+		<method name="loopstart">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set loop start point (seconds)</digest>
+			<description>Loop start position in seconds.</description>
+		</method>
+
+		<method name="loopend">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set loop end point (seconds)</digest>
+			<description>Loop end position in seconds.</description>
+		</method>
+
+		<method name="loop">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="flag" type="int" optional="0" />
+			</arglist>
+			<digest>Set loop flag</digest>
+			<description>1 loops; 0 plays one-shot and stops at the loop end.</description>
+		</method>
+
+		<method name="fade">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set loop/record crossfade time</digest>
+			<description>Crossfade time in seconds for loop wrap and record transitions.</description>
+		</method>
+
+		<method name="reclevel">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amp" type="float" optional="0" />
+			</arglist>
+			<digest>Set record amplitude</digest>
+			<description>How much of the input is written into the buffer.</description>
+		</method>
+
+		<method name="prelevel">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amp" type="float" optional="0" />
+			</arglist>
+			<digest>Set overdub preserve level</digest>
+			<description>0 overwrites existing content; 1 preserves it fully (overdub); in between, decaying overdub.</description>
+		</method>
+
+		<method name="recoffset">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set record-head offset</digest>
+			<description>Offset of the record head relative to the play head, in seconds (default approximately -8 samples).</description>
+		</method>
+
+		<method name="prefc">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="hz" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter cutoff (Hz)</digest>
+			<description>Cutoff frequency of the pre-filter (applied to the record input).</description>
+		</method>
+
+		<method name="prerq">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="rq" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter reciprocal Q</digest>
+			<description>Reciprocal Q (resonance) of the pre-filter; smaller values are more resonant.</description>
+		</method>
+
+		<method name="prelp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter low-pass mix</digest>
+			<description>Low-pass output mix of the pre-filter.</description>
+		</method>
+
+		<method name="prehp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter high-pass mix</digest>
+			<description>High-pass output mix of the pre-filter.</description>
+		</method>
+
+		<method name="prebp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter band-pass mix</digest>
+			<description>Band-pass output mix of the pre-filter.</description>
+		</method>
+
+		<method name="prebr">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter band-reject mix</digest>
+			<description>Band-reject (notch) output mix of the pre-filter.</description>
+		</method>
+
+		<method name="predry">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amp" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter dry mix</digest>
+			<description>Dry (unfiltered) input mix added to the pre-filter output.</description>
+		</method>
+
+		<method name="prefcmod">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amount" type="float" optional="0" />
+			</arglist>
+			<digest>Input filter cutoff rate-tracking</digest>
+			<description>How much the pre-filter cutoff tracks the playback rate.</description>
+		</method>
+
+		<method name="postfc">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="hz" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter cutoff (Hz)</digest>
+			<description>Cutoff frequency of the post-filter (applied to playback).</description>
+		</method>
+
+		<method name="postrq">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="rq" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter reciprocal Q</digest>
+			<description>Reciprocal Q (resonance) of the post-filter; smaller values are more resonant.</description>
+		</method>
+
+		<method name="postlp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter low-pass mix</digest>
+			<description>Low-pass output mix of the post-filter.</description>
+		</method>
+
+		<method name="posthp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter high-pass mix</digest>
+			<description>High-pass output mix of the post-filter.</description>
+		</method>
+
+		<method name="postbp">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter band-pass mix</digest>
+			<description>Band-pass output mix of the post-filter.</description>
+		</method>
+
+		<method name="postbr">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="mix" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter band-reject mix</digest>
+			<description>Band-reject (notch) output mix of the post-filter.</description>
+		</method>
+
+		<method name="postdry">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amp" type="float" optional="0" />
+			</arglist>
+			<digest>Output filter dry mix</digest>
+			<description>Dry (unfiltered) playback mix added to the post-filter output.</description>
+		</method>
+
+		<method name="level">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="amp" type="float" optional="0" />
+			</arglist>
+			<digest>Set voice output level</digest>
+			<description>Voice output gain, scaling both the per-voice outlet and the stereo mix. Smoothed.</description>
+		</method>
+
+		<method name="pan">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="position" type="float" optional="0" />
+			</arglist>
+			<digest>Set voice pan</digest>
+			<description>Equal-power pan into the stereo mix: -1 left, 0 centre, 1 right. Smoothed.</description>
+		</method>
+
+		<method name="levelslew">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set level smoothing time</digest>
+			<description>Smoothing (slew) time in seconds for the level message.</description>
+		</method>
+
+		<method name="panslew">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set pan smoothing time</digest>
+			<description>Smoothing (slew) time in seconds for the pan message.</description>
+		</method>
+
+		<method name="recpreslew">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set record/pre level slew time</digest>
+			<description>Smoothing time in seconds for record and pre levels inside softcut.</description>
+		</method>
+
+		<method name="rateslew">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set rate slew time</digest>
+			<description>Smoothing time in seconds for rate changes.</description>
+		</method>
+
+		<method name="quant">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="unit" type="float" optional="0" />
+			</arglist>
+			<digest>Set phase quantization unit</digest>
+			<description>Quantization unit for the reported (quantized) phase of the voice.</description>
+		</method>
+
+		<method name="phaseoffset">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="seconds" type="float" optional="0" />
+			</arglist>
+			<digest>Set reported phase offset</digest>
+			<description>Offset in seconds applied to the voice's reported phase.</description>
+		</method>
+
+		<method name="sync">
+			<arglist>
+				<arg name="follow" type="int" optional="0" />
+				<arg name="lead" type="int" optional="0" />
+				<arg name="offset" type="float" optional="0" />
+			</arglist>
+			<digest>Sync one voice to another</digest>
+			<description>Snaps voice follow to voice lead's current position plus offset seconds.</description>
+		</method>
+
+		<method name="poll">
+			<digest>Report voice positions</digest>
+			<description>Emits "position &lt;p0&gt; ... &lt;p5&gt;" out the report outlet.</description>
+		</method>
+
+		<method name="set">
+			<arglist>
+				<arg name="buffer-name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set the shared buffer~</digest>
+			<description>Points all six voices at the named mono buffer~.</description>
+		</method>
+
+		<method name="voicebuf">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="buffer-name" type="symbol" optional="0" />
+			</arglist>
+			<digest>Set one voice's buffer~</digest>
+			<description>Points a single voice at its own mono buffer~, overriding the shared default (e.g. for stereo).</description>
+		</method>
+
+		<method name="inlevel">
+			<arglist>
+				<arg name="inlet" type="int" optional="0" />
+				<arg name="voice" type="int" optional="0" />
+				<arg name="gain" type="float" optional="0" />
+			</arglist>
+			<digest>Route an inlet into a voice's record input</digest>
+			<description>
+				Input routing matrix. Routes signal inlet (0-5) into the given voice's record input at
+				gain. Defaults to identity (inlet v -&gt; voice v at unity); off-diagonal entries let one
+				input feed several voices.
+			</description>
+		</method>
+
+		<method name="feedback">
+			<arglist>
+				<arg name="src" type="int" optional="0" />
+				<arg name="dst" type="int" optional="0" />
+				<arg name="gain" type="float" optional="0" />
+			</arglist>
+			<digest>Route a voice's output into another voice's record input</digest>
+			<description>
+				Feedback matrix. Routes voice src's output into voice dst's record input at gain (one
+				block delayed). Enables overdub/looping networks; self-feedback (src equals dst) is
+				allowed, so mind stability.
+			</description>
+		</method>
+
+		<method name="reset">
+			<digest>Reset all voices to defaults</digest>
+			<description>
+				Resets all voices and routing to defaults: rate 1, 1 second loop, looping on, level 1,
+				pan centre, no feedback, identity input routing.
+			</description>
+		</method>
+
+	</methodlist>
+
+
+	<!--ATTRIBUTES-->
+
+	<attributelist>
+
+		<attribute name='report' get='1' set='1' type='int' size='1' >
+			<digest>Phase report interval (ms)</digest>
+			<description>
+				Interval in milliseconds at which the report outlet emits "phase &lt;voice&gt;
+				&lt;quantphase&gt;" messages when a voice's quantized phase changes. 0 (the default)
+				disables automatic reporting.
+			</description>
+		</attribute>
+
+	</attributelist>
+
+
+	<!--RELATED-->
+
+	<seealsolist>
+		<seealso name="buffer~"/>
+		<seealso name="groove~"/>
+		<seealso name="record~"/>
+		<seealso name="poke~"/>
+	</seealsolist>
+
+
+</c74object>

@@ -24,6 +24,16 @@ MACRO(SUBDIRLIST result curdir)
     SET(${result} ${dirlist})
 ENDMACRO()
 
+# softcut-lib: build its static library once, shared by the external and tests.
+set(SOFTCUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/softcut-lib/softcut-lib")
+add_subdirectory(${SOFTCUT_DIR} ${CMAKE_BINARY_DIR}/softcut-build)
+# static lib is linked into a MODULE (shared object) -> needs PIC
+set_target_properties(softcut PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# host-agnostic engine header (used by the external and the offline tests)
+set(SOFTKUT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/source/include")
+set(SOFTCUT_INCLUDE "${SOFTCUT_DIR}/include")
+
 # Generate a project for every folder in the "source/projects" folder
 
 SUBDIRLIST(PROJECT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/source/projects)
@@ -35,3 +45,9 @@ foreach (project_dir ${PROJECT_DIRS})
         add_subdirectory(${project_path})
     endif ()
 endforeach ()
+
+# Offline test harness (plain executable, not a Max external)
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/source/tests/CMakeLists.txt")
+    enable_testing()
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/tests)
+endif ()
