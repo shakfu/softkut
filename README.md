@@ -11,6 +11,11 @@ The DSP lives in a host-agnostic engine (`source/include/softkut_engine.h`); thi
 thin shell over it. Control messages are marshalled to the audio thread through a lock-free
 command queue, so parameter changes are click-free and thread-safe.
 
+The package builds two externals over the same engine: **`softkut~`** (discrete per-voice
+inlets/outlets, 6 voices) and **`mc.softkut~`** (a multichannel variant with a variable voice count —
+see [Multichannel variant](#multichannel-variant-mcsoftkut) below). They share an identical message
+API.
+
 ## Building
 
 ```
@@ -19,9 +24,9 @@ make build                                 # configure + build (universal mac bi
 make test                                  # build + run the offline engine test harness
 ```
 
-`make build` produces `externals/softkut~.mxo`. `make link` symlinks the repo into your Max
-`Packages` folder so Max can find the external and its help patch. The build is also a standard
-CMake project (`cmake .. && cmake --build .`).
+`make build` produces `externals/softkut~.mxo` and `externals/mc.softkut~.mxo`. `make link` symlinks
+the repo into your Max `Packages` folder so Max can find the externals and the help patch. The build
+is also a standard CMake project (`cmake .. && cmake --build .`).
 
 ## The object
 
@@ -189,14 +194,39 @@ pan 0 -1  ,  pan 1 1
 feedback 0 1 0.8     (voice 0 output -> voice 1 record at 0.8)
 ```
 
+## Multichannel variant: `mc.softkut~`
+
+`mc.softkut~` is the MC (multichannel) build of the same engine — instead of discrete per-voice
+inlets/outlets it uses Max's multichannel signals:
+
+```
+[mc.softkut~ <buffer~ name> <voices>]    e.g. [mc.softkut~ skbuf 8]
+```
+
+- **Inlet** (1): a multichannel record input — channel *v* feeds voice *v*'s record input
+  (`Z_MC_INLETS`, so a single mono cord or an N-channel cord both work). Control messages go here.
+- **Outlet 0**: multichannel voice outputs, one channel per voice (`mc.unpack~ <voices>` to split).
+- **Outlet 1**: message outlet (phase/position reports).
+
+The **voice count is a creation argument** (default 6, capped at 16) and becomes the channel count of
+outlet 0. Everything else — the entire message API above, including the `inlevel` matrix (whose
+"inlet" index is now the input channel index) — is identical, since both objects share the same
+engine. There is no built-in stereo mix on `mc.softkut~`: the per-voice `level` still applies to the
+bundle, but stereo placement is left to downstream `mc.*~` objects (so `pan`/`panslew` have no audible
+effect here). Drop the voice bundle straight into `mc.*~` chains, or pan/sum it as you like.
+
 ## Project layout
 
 - `source/include/softkut_engine.h` — host-agnostic engine (voices, command queue, level/pan,
-  routing matrices, buffer framing). No Max dependency.
-- `source/projects/softkut_tilde/softkut~.cpp` — the Max shell.
+  routing matrices, buffer framing, runtime voice count). No Max dependency.
+- `source/include/softkut_control.h` — shared control-message table + dispatch (used by both shells).
+- `source/projects/softkut_tilde/softkut~.cpp` — discrete Max shell (6 voices).
+- `source/projects/mc.softkut_tilde/mc.softkut~.cpp` — multichannel shell (variable voices).
 - `source/tests/test_engine.cpp` — offline test harness (`make test`).
 - `source/thirdparty/softcut-lib` — the upstream softcut library (built statically).
 - `help/softkut~.maxhelp` — help patch.
+- `docs/softkut~.maxref` — structured object reference (Max ref panel).
+- `CHANGELOG.md` — release notes. `TODO.md` — deferred work (fade-curve shaping).
 
 ## Credits
 

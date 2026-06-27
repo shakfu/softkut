@@ -106,14 +106,21 @@ public:
     static const size_t kQueueCap = 1024;
     static constexpr float kHalfPi = 1.57079632679489662f;
 
-    Engine() {
+    Engine() : numVoices_(NumVoices) {
         for (int v = 0; v < NumVoices; ++v)
             lastQuant_[v] = -1.0;             // force first report
         setDefaults();
         zeroOutStore();
     }
 
-    int numVoices() const { return NumVoices; }
+    // NumVoices is the compile-time maximum (array sizing); the active voice
+    // count is a runtime value in [1, NumVoices]. Only active voices are
+    // processed; outputs/feedback/input-routing all bound to it.
+    int  numVoices() const { return numVoices_; }
+    int  maxVoices() const { return NumVoices; }
+    void setNumVoices(int n) {
+        numVoices_ = n < 1 ? 1 : (n > NumVoices ? NumVoices : n);
+    }
 
     // softcut requires a power-of-two buffer length (it wraps with a bitmask).
     // Largest power of two <= n (0 if n < 1).
@@ -226,15 +233,15 @@ public:
         float (*prevOut)[kMaxBlock] = outStore_[outCur_ ^ 1];
         float (*curOut)[kMaxBlock]  = outStore_[outCur_];
 
-        for (int dst = 0; dst < NumVoices; ++dst) {
+        for (int dst = 0; dst < numVoices_; ++dst) {
             // record input = input matrix (inlet -> voice) + voice->voice feedback
             for (int i = 0; i < nframes; ++i) recIn_[i] = 0.f;
-            for (int inl = 0; inl < NumVoices; ++inl) {
+            for (int inl = 0; inl < numVoices_; ++inl) {
                 const double *in = ins[inl];
                 for (int i = 0; i < nframes; ++i)
                     recIn_[i] += static_cast<float>(in[i]) * inLevel_[inl][dst].update();
             }
-            for (int src = 0; src < NumVoices; ++src)
+            for (int src = 0; src < numVoices_; ++src)
                 for (int i = 0; i < nframes; ++i)
                     recIn_[i] += prevOut[src][i] * fbLevel_[src][dst].update();
 
@@ -382,6 +389,7 @@ private:
         outCur_ = 0;
     }
 
+    int                             numVoices_;     // active voice count <= NumVoices
     softcut::Softcut<NumVoices>     cut_;
     SpscQueue<Command, kQueueCap>   queue_;
     double                          sampleRate_ = 48000.0;

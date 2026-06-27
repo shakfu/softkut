@@ -24,7 +24,7 @@
 #include "ext_buffer.h"   // buffer~ reference + lock/unlock
 #include "z_dsp.h"        // MSP
 
-#include "softkut_engine.h"
+#include "softkut_control.h"   // shared command table + dispatch (pulls in engine)
 
 // ---------------------------------------------------------------------------
 static const int NumVoices = 6;
@@ -53,72 +53,12 @@ typedef struct _softkut {
 static t_class  *softkut_class = NULL;
 static t_symbol *ps_phase, *ps_position;
 
-// ---------------------------------------------------------------------------
-// table-driven control surface: every message below is "<voice> <value>" and
-// maps onto one engine command id.
-// ---------------------------------------------------------------------------
-struct CmdEntry { const char *name; softkut::CmdId id; t_symbol *sym; };
-
-static CmdEntry g_cmds[] = {
-    {"rate",        softkut::CmdId::Rate,           NULL},
-    {"loopstart",   softkut::CmdId::LoopStart,      NULL},
-    {"loopend",     softkut::CmdId::LoopEnd,        NULL},
-    {"loop",        softkut::CmdId::LoopFlag,       NULL},
-    {"fade",        softkut::CmdId::FadeTime,       NULL},
-    {"reclevel",    softkut::CmdId::RecLevel,       NULL},
-    {"prelevel",    softkut::CmdId::PreLevel,       NULL},
-    {"rec",         softkut::CmdId::RecFlag,        NULL},
-    {"play",        softkut::CmdId::PlayFlag,       NULL},
-    {"reconce",     softkut::CmdId::RecOnceFlag,    NULL},
-    {"position",    softkut::CmdId::Position,       NULL},
-    {"recoffset",   softkut::CmdId::RecOffset,      NULL},
-    {"prefc",       softkut::CmdId::PreFilterFc,    NULL},
-    {"prefcmod",    softkut::CmdId::PreFilterFcMod, NULL},
-    {"prerq",       softkut::CmdId::PreFilterRq,    NULL},
-    {"prelp",       softkut::CmdId::PreFilterLp,    NULL},
-    {"prehp",       softkut::CmdId::PreFilterHp,    NULL},
-    {"prebp",       softkut::CmdId::PreFilterBp,    NULL},
-    {"prebr",       softkut::CmdId::PreFilterBr,    NULL},
-    {"predry",      softkut::CmdId::PreFilterDry,   NULL},
-    {"postfc",      softkut::CmdId::PostFilterFc,   NULL},
-    {"postrq",      softkut::CmdId::PostFilterRq,   NULL},
-    {"postlp",      softkut::CmdId::PostFilterLp,   NULL},
-    {"posthp",      softkut::CmdId::PostFilterHp,   NULL},
-    {"postbp",      softkut::CmdId::PostFilterBp,   NULL},
-    {"postbr",      softkut::CmdId::PostFilterBr,   NULL},
-    {"postdry",     softkut::CmdId::PostFilterDry,  NULL},
-    {"level",       softkut::CmdId::Level,          NULL},
-    {"pan",         softkut::CmdId::Pan,            NULL},
-    {"levelslew",   softkut::CmdId::LevelSlewTime,  NULL},
-    {"panslew",     softkut::CmdId::PanSlewTime,    NULL},
-    {"recpreslew",  softkut::CmdId::RecPreSlewTime, NULL},
-    {"rateslew",    softkut::CmdId::RateSlewTime,   NULL},
-    {"quant",       softkut::CmdId::PhaseQuant,     NULL},
-    {"phaseoffset", softkut::CmdId::PhaseOffset,    NULL},
-};
-static const int g_ncmds = (int)(sizeof(g_cmds) / sizeof(g_cmds[0]));
+// The control surface (command table + dispatch) lives in softkut_control.h,
+// shared with mc.softkut~. The thunks below forward to it.
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-static int parse_voice_val(t_softkut *x, t_symbol *s, long argc, t_atom *argv,
-                           long *v, double *val)
-{
-    if (argc < 2) {
-        object_error((t_object *)x, "%s: expected <voice> <value>", s->s_name);
-        return 0;
-    }
-    long voice = atom_getlong(argv);
-    if (voice < 0 || voice >= NumVoices) {
-        object_error((t_object *)x, "%s: voice %ld out of range [0..%d]",
-                     s->s_name, voice, NumVoices - 1);
-        return 0;
-    }
-    *v   = voice;
-    *val = atom_getfloat(argv + 1);
-    return 1;
-}
-
 // create or repoint the buffer~ reference for one voice
 static void ensure_vbuf(t_softkut *x, int v)
 {
@@ -128,102 +68,30 @@ static void ensure_vbuf(t_softkut *x, int v)
 }
 
 // ---------------------------------------------------------------------------
-// control messages -> engine commands
+// control messages -> shared dispatch (softkut_control.h)
 // ---------------------------------------------------------------------------
 void softkut_cmd(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    long v; double val;
-    if (!parse_voice_val(x, s, argc, argv, &v, &val)) return;
-
-    for (int i = 0; i < g_ncmds; ++i) {
-        if (s == g_cmds[i].sym) {
-            softkut::Command c{g_cmds[i].id, (int16_t)v, 0, (float)val};
-            if (!x->engine->push(c))
-                object_warn((t_object *)x, "%s: command queue full, dropped", s->s_name);
-            return;
-        }
-    }
-    object_error((t_object *)x, "%s: unknown command", s->s_name);
-}
+{ softkut::dispatchCmd(x->engine, (t_object *)x, s, argc, argv); }
 
 void softkut_sync(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 3) {
-        object_error((t_object *)x, "sync: expected <follow> <lead> <offset>");
-        return;
-    }
-    long follow = atom_getlong(argv);
-    long lead   = atom_getlong(argv + 1);
-    if (follow < 0 || follow >= NumVoices || lead < 0 || lead >= NumVoices) {
-        object_error((t_object *)x, "sync: voice index out of range [0..%d]", NumVoices - 1);
-        return;
-    }
-    if (!x->engine->syncVoice((int)follow, (int)lead, (float)atom_getfloat(argv + 2)))
-        object_warn((t_object *)x, "sync: command queue full, dropped");
-}
+{ softkut::dispatchSync(x->engine, (t_object *)x, argc, argv); }
+
+void softkut_stop(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
+{ softkut::dispatchStop(x->engine, (t_object *)x, argc, argv); }
+
+void softkut_enable(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
+{ softkut::dispatchEnable(x->engine, (t_object *)x, s, argc, argv); }
+
+void softkut_feedback(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
+{ softkut::dispatchFeedback(x->engine, (t_object *)x, argc, argv); }
+
+void softkut_inlevel(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
+{ softkut::dispatchInlevel(x->engine, (t_object *)x, argc, argv); }
 
 void softkut_reset(t_softkut *x)
 {
     if (!x->engine->reset())
         object_warn((t_object *)x, "reset: command queue full, dropped");
-}
-
-// "stop <voice>": immediately park the voice's heads (distinct from "play 0").
-void softkut_stop(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 1) { object_error((t_object *)x, "stop: expected <voice>"); return; }
-    long v = atom_getlong(argv);
-    if (v < 0 || v >= NumVoices) {
-        object_error((t_object *)x, "stop: voice %ld out of range [0..%d]", v, NumVoices - 1);
-        return;
-    }
-    if (!x->engine->stopVoice((int)v))
-        object_warn((t_object *)x, "stop: command queue full, dropped");
-}
-
-// "enable <voice> <0/1>": master on/off gate for a voice (skips its processing).
-void softkut_enable(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    long v; double val;
-    if (!parse_voice_val(x, s, argc, argv, &v, &val)) return;
-    if (!x->engine->setEnabled((int)v, val > 0.0))
-        object_warn((t_object *)x, "enable: command queue full, dropped");
-}
-
-// "feedback <src> <dst> <gain>": route voice src's output into voice dst's
-// record input (one block delayed).
-void softkut_feedback(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 3) {
-        object_error((t_object *)x, "feedback: expected <src> <dst> <gain>");
-        return;
-    }
-    long src = atom_getlong(argv);
-    long dst = atom_getlong(argv + 1);
-    if (src < 0 || src >= NumVoices || dst < 0 || dst >= NumVoices) {
-        object_error((t_object *)x, "feedback: voice index out of range [0..%d]", NumVoices - 1);
-        return;
-    }
-    if (!x->engine->setFeedback((int)src, (int)dst, (float)atom_getfloat(argv + 2)))
-        object_warn((t_object *)x, "feedback: command queue full, dropped");
-}
-
-// "inlevel <inlet> <voice> <gain>": route signal inlet into a voice's record
-// input (matrix; defaults to identity: inlet v -> voice v at unity).
-void softkut_inlevel(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 3) {
-        object_error((t_object *)x, "inlevel: expected <inlet> <voice> <gain>");
-        return;
-    }
-    long inl = atom_getlong(argv);
-    long dst = atom_getlong(argv + 1);
-    if (inl < 0 || inl >= NumVoices || dst < 0 || dst >= NumVoices) {
-        object_error((t_object *)x, "inlevel: index out of range [0..%d]", NumVoices - 1);
-        return;
-    }
-    if (!x->engine->setInLevel((int)inl, (int)dst, (float)atom_getfloat(argv + 2)))
-        object_warn((t_object *)x, "inlevel: command queue full, dropped");
 }
 
 // report each voice's saved playback position out the message outlet.
@@ -440,11 +308,11 @@ extern "C" void ext_main(void *r)
     t_class *c = class_new("softkut~", (method)softkut_new, (method)softkut_free,
                            (long)sizeof(t_softkut), 0L, A_GIMME, 0);
 
-    // table-driven "<voice> <value>" control messages
-    for (int i = 0; i < g_ncmds; ++i) {
-        g_cmds[i].sym = gensym(g_cmds[i].name);
-        class_addmethod(c, (method)softkut_cmd, g_cmds[i].name, A_GIMME, 0);
-    }
+    // table-driven "<voice> <value>" control messages (shared table)
+    softkut::initCommandSymbols();
+    int ncmds; softkut::CmdEntry *cmds = softkut::commandTable(&ncmds);
+    for (int i = 0; i < ncmds; ++i)
+        class_addmethod(c, (method)softkut_cmd, cmds[i].name, A_GIMME, 0);
 
     class_addmethod(c, (method)softkut_set,      "set",      A_GIMME, 0);
     class_addmethod(c, (method)softkut_voicebuf, "voicebuf", A_GIMME, 0);
