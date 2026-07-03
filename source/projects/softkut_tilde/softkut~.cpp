@@ -51,7 +51,7 @@ typedef struct _softkut {
 } t_softkut;
 
 static t_class  *softkut_class = NULL;
-static t_symbol *ps_phase, *ps_position;
+static t_symbol *ps_phase, *ps_info;
 
 // The control surface (command table + dispatch) lives in softkut_control.h,
 // shared with mc.softkut~. The thunks below forward to it.
@@ -94,13 +94,24 @@ void softkut_reset(t_softkut *x)
         object_warn((t_object *)x, "reset: command queue full, dropped");
 }
 
-// report each voice's saved playback position out the message outlet.
+// report each voice's karma~-style metadata out the message outlet: one
+// `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list
+// per voice. Positions are converted from seconds to ms here.
 void softkut_poll(t_softkut *x)
 {
-    t_atom a[NumVoices];
-    for (int v = 0; v < x->nvoices; ++v)
-        atom_setfloat(a + v, x->engine->getSavedPosition(v));
-    outlet_anything(x->reportout, ps_position, (short)x->nvoices, a);
+    for (int v = 0; v < x->nvoices; ++v) {
+        softkut::VoiceInfo vi = x->engine->getVoiceInfo(v);
+        t_atom a[8];
+        atom_setlong (a + 0, v);
+        atom_setfloat(a + 1, vi.position);
+        atom_setlong (a + 2, vi.play);
+        atom_setlong (a + 3, vi.rec);
+        atom_setfloat(a + 4, vi.startSec * 1000.0);
+        atom_setfloat(a + 5, vi.endSec * 1000.0);
+        atom_setfloat(a + 6, vi.windowSec * 1000.0);
+        atom_setlong (a + 7, vi.state);
+        outlet_anything(x->reportout, ps_info, 8, a);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +269,7 @@ void softkut_assist(t_softkut *x, void *b, long m, long a, char *s)
     } else if (a < x->nvoices) {
         snprintf_zero(s, 256, "(signal) Voice %ld output", a);
     } else {
-        snprintf_zero(s, 256, "(list) Phase / position reports");
+        snprintf_zero(s, 256, "(list) phase / info reports");
     }
 }
 
@@ -342,5 +353,5 @@ extern "C" void ext_main(void *r)
     softkut_class = c;
 
     ps_phase    = gensym("phase");
-    ps_position = gensym("position");
+    ps_info     = gensym("info");
 }

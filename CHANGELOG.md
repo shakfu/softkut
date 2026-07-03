@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- karma~-style per-voice metadata report: sending `poll` now emits one
+  `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list
+  per voice on the message outlet (both `softkut~` and `mc.softkut~`). `pos` is
+  normalized to the loop window (0..1); `state` is synthesized from the play/rec
+  flags as `(rec<<1)|play` (0=stop, 1=play, 2=record, 3=overdub), since softcut
+  has no state machine. Backed by the engine's `getVoiceInfo`/`VoiceInfo`, which
+  caches the (otherwise write-only) loop bounds. Covered by `test_voice_info`.
+
+### Changed
+
+- The `poll` message now emits the richer `info` list in place of the former
+  softkut-only `position` message (which reported only raw saved positions in
+  seconds). The `@report <ms>` clock and its `phase` events are unchanged --
+  `phase` remains the faithful softcut/norns idiom for driving a waveform
+  playhead cursor (absolute buffer position, change-throttled).
+
 ## [0.1.0] - 2026-06-27
 
 Initial implementation: a Max/MSP wrapper around monome's softcut-lib, plus a
@@ -87,4 +107,5 @@ multichannel variant, built on a shared host-agnostic engine.
 - Fade-curve shaping is the one softcut-lib capability not yet exposed (locked
   behind `Voice`'s private state); investigated and deferred — see `TODO.md`.
 
+[Unreleased]: https://github.com/shakfu/softkut/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/shakfu/softkut

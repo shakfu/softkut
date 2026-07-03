@@ -41,7 +41,7 @@ typedef struct _mcsoftkut {
 } t_mcsoftkut;
 
 static t_class  *mcsoftkut_class = NULL;
-static t_symbol *ps_phase, *ps_position;
+static t_symbol *ps_phase, *ps_info;
 
 // ---------------------------------------------------------------------------
 static void ensure_vbuf(t_mcsoftkut *x, int v)
@@ -78,12 +78,23 @@ void mcsoftkut_reset(t_mcsoftkut *x)
         object_warn((t_object *)x, "reset: command queue full, dropped");
 }
 
+// one `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>`
+// list per voice; positions converted from seconds to ms here.
 void mcsoftkut_poll(t_mcsoftkut *x)
 {
-    t_atom a[MC_MAX_VOICES];
-    for (int v = 0; v < x->nvoices; ++v)
-        atom_setfloat(a + v, x->engine->getSavedPosition(v));
-    outlet_anything(x->reportout, ps_position, (short)x->nvoices, a);
+    for (int v = 0; v < x->nvoices; ++v) {
+        softkut::VoiceInfo vi = x->engine->getVoiceInfo(v);
+        t_atom a[8];
+        atom_setlong (a + 0, v);
+        atom_setfloat(a + 1, vi.position);
+        atom_setlong (a + 2, vi.play);
+        atom_setlong (a + 3, vi.rec);
+        atom_setfloat(a + 4, vi.startSec * 1000.0);
+        atom_setfloat(a + 5, vi.endSec * 1000.0);
+        atom_setfloat(a + 6, vi.windowSec * 1000.0);
+        atom_setlong (a + 7, vi.state);
+        outlet_anything(x->reportout, ps_info, 8, a);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +280,7 @@ void mcsoftkut_assist(t_mcsoftkut *x, void *b, long m, long a, char *s)
     } else if (a == 0) {
         snprintf_zero(s, 256, "(multichannel signal) %ld voice outputs", x->nvoices);
     } else {
-        snprintf_zero(s, 256, "(list) phase / position reports");
+        snprintf_zero(s, 256, "(list) phase / info reports");
     }
 }
 
@@ -356,5 +367,5 @@ extern "C" void ext_main(void *r)
     mcsoftkut_class = c;
 
     ps_phase    = gensym("phase");
-    ps_position = gensym("position");
+    ps_info     = gensym("info");
 }

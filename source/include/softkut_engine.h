@@ -54,6 +54,22 @@ struct Command {
 };
 
 // ---------------------------------------------------------------------------
+// Per-voice metadata snapshot (karma~-style). Filled by Engine::getVoiceInfo
+// and reported on demand by the shells' `poll` handler. Positions are in
+// seconds (the shell converts to ms); `position` is normalized to [0,1] within
+// the voice's loop window; `state` is a synthesized play/rec code.
+// ---------------------------------------------------------------------------
+struct VoiceInfo {
+    float position;    // 0..1 within the loop window (start..end)
+    int   play;        // play flag (0/1)
+    int   rec;         // record flag (0/1)
+    float startSec;    // loop start (seconds)
+    float endSec;      // loop end (seconds)
+    float windowSec;   // endSec - startSec
+    int   state;       // 0=stop, 1=play, 2=record, 3=overdub (rec<<1 | play)
+};
+
+// ---------------------------------------------------------------------------
 // Lock-free single-producer / single-consumer ring buffer.
 // Capacity must be a power of two. push() is called only from the producer
 // thread, pop() only from the consumer thread.
@@ -287,6 +303,29 @@ public:
     bool   getRecFlag(int v)       { return cut_.getRecFlag(v); }
     bool   getEnabled(int v)       { return enabled_[v]; }
 
+    // Snapshot the karma~-style metadata for one voice. Safe from the control
+    // thread: play/rec/position read softcut atomics, and the loop bounds are
+    // cached in std::atomic<float> updated wherever loop start/end change.
+    VoiceInfo getVoiceInfo(int v) {
+        const float start = loopStart_[v].load(std::memory_order_relaxed);
+        const float end   = loopEnd_[v].load(std::memory_order_relaxed);
+        const float pos   = cut_.getSavedPosition(v);   // absolute buffer seconds
+        const float win   = end - start;
+        float norm = win > 1e-9f ? (pos - start) / win : 0.f;
+        norm = norm < 0.f ? 0.f : (norm > 1.f ? 1.f : norm);
+        const bool play = cut_.getPlayFlag(v);
+        const bool rec  = cut_.getRecFlag(v);
+        VoiceInfo info;
+        info.position  = norm;
+        info.play      = play ? 1 : 0;
+        info.rec       = rec ? 1 : 0;
+        info.startSec  = start;
+        info.endSec    = end;
+        info.windowSec = win;
+        info.state     = (rec ? 2 : 0) | (play ? 1 : 0);
+        return info;
+    }
+
     // returns true (once) when a voice's quantized phase has changed since the
     // last call; used to throttle phase reporting to the host.
     bool checkQuantPhaseChanged(int v) {
@@ -310,8 +349,10 @@ private:
         const int v = c.idx0;
         switch (c.id) {
             case CmdId::Rate:           cut_.setRate(v, c.value); break;
-            case CmdId::LoopStart:      cut_.setLoopStart(v, c.value); break;
-            case CmdId::LoopEnd:        cut_.setLoopEnd(v, c.value); break;
+            case CmdId::LoopStart:      cut_.setLoopStart(v, c.value);
+                                        loopStart_[v].store(c.value, std::memory_order_relaxed); break;
+            case CmdId::LoopEnd:        cut_.setLoopEnd(v, c.value);
+                                        loopEnd_[v].store(c.value, std::memory_order_relaxed); break;
             case CmdId::LoopFlag:       cut_.setLoopFlag(v, c.value > 0.f); break;
             case CmdId::FadeTime:       cut_.setFadeTime(v, c.value); break;
             case CmdId::RecLevel:       cut_.setRecLevel(v, c.value); break;
@@ -365,6 +406,8 @@ private:
             cut_.setRate(v, 1.0f);
             cut_.setLoopStart(v, 0.0f);
             cut_.setLoopEnd(v, 1.0f);
+            loopStart_[v].store(0.0f, std::memory_order_relaxed);
+            loopEnd_[v].store(1.0f, std::memory_order_relaxed);
             cut_.setLoopFlag(v, true);
             cut_.setFadeTime(v, 0.01f);
             cut_.setRecLevel(v, 1.0f);
@@ -399,6 +442,8 @@ private:
     SpscQueue<Command, kQueueCap>   queue_;
     double                          sampleRate_ = 48000.0;
     softcut::phase_t                lastQuant_[NumVoices];
+    std::atomic<float>              loopStart_[NumVoices];  // cached loop bounds
+    std::atomic<float>              loopEnd_[NumVoices];    // (seconds) for reports
     softcut::LogRamp                outLevel_[NumVoices];
     softcut::LogRamp                outPan_[NumVoices];
     softcut::LogRamp                fbLevel_[NumVoices][NumVoices];  // [src][dst]
