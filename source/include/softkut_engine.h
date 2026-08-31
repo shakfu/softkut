@@ -11,6 +11,10 @@
 //   - ONE audio/consumer thread drains them at the top of process().
 //   - Phase getters read std::atomic state inside softcut and are safe from any
 //     thread without going through the queue.
+//   - Transport state (play/rec) is NOT safe to read from softcut directly:
+//     Voice::playFlag/recFlag are plain bools and the audio thread clears
+//     recFlag when a record-once pass finishes. The audio thread publishes a
+//     packed state+position snapshot instead, and the poll getters read that.
 // A Max object's messages are assumed to arrive serialized on the control side
 // (the standard assumption; defer to the main thread if that is ever violated).
 
@@ -21,6 +25,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "softcut/Softcut.h"
 #include "softcut/Types.h"
@@ -123,8 +128,11 @@ public:
     static constexpr float kHalfPi = 1.57079632679489662f;
 
     Engine() : numVoices_(NumVoices) {
-        for (int v = 0; v < NumVoices; ++v)
+        for (int v = 0; v < NumVoices; ++v) {
             lastQuant_[v] = -1.0;             // force first report
+            pubSnap_[v].store(0, std::memory_order_relaxed);
+            wrote_[v].store(false, std::memory_order_relaxed);
+        }
         setDefaults();
         zeroOutStore();
     }
@@ -233,13 +241,109 @@ public:
     //   voice with a null buf outputs silence. rawFrames is reduced internally
     //   to a usable power-of-two prefix.
     // mixL/mixR: the equal-power panned sum of all voices (may be null to skip).
+    // A host vector longer than kMaxBlock is split into kMaxBlock chunks rather
+    // than clamped: the scratch buffers and the feedback store hold one chunk,
+    // so a clamped pass left every output sample past kMaxBlock unwritten.
     void process(const double *const *ins, double *const *voiceOuts, int nframes,
                  float *const *bufs, const size_t *rawFrames,
                  double *mixL, double *mixR) {
         drain();
 
-        if (nframes > kMaxBlock) nframes = kMaxBlock;   // guard scratch bounds
+        for (int v = 0; v < numVoices_; ++v)
+            wrote_[v].store(false, std::memory_order_relaxed);
 
+        const double *inSlice[NumVoices];
+        double       *outSlice[NumVoices];
+        for (int off = 0; off < nframes; off += kMaxBlock) {
+            const int n = (nframes - off < kMaxBlock) ? (nframes - off) : kMaxBlock;
+            for (int v = 0; v < numVoices_; ++v) {
+                inSlice[v]  = ins[v] + off;
+                outSlice[v] = voiceOuts[v] + off;
+            }
+            processChunk(inSlice, outSlice, n, bufs, rawFrames,
+                         mixL ? mixL + off : nullptr, mixR ? mixR + off : nullptr);
+        }
+        updatePhases();
+    }
+
+    // ---- phase / transport poll (safe from any thread) -----------------
+    // play/rec come from the snapshot the audio thread publishes at the end of
+    // each chunk, never from softcut's plain-bool flags.
+    double getSavedPosition(int v) { return cut_.getSavedPosition(v); }
+    double getQuantPhase(int v)    { return cut_.getQuantPhase(v); }
+    bool   getPlayFlag(int v)      { return (snapState(snap(v)) & 1) != 0; }
+    bool   getRecFlag(int v)       { return (snapState(snap(v)) & 2) != 0; }
+    bool   getEnabled(int v)       { return enabled_[v]; }
+    // True if voice v wrote to its buffer during the last process() call. A
+    // record-once pass clears the record flag inside that same call, so the
+    // record flag alone misses the block holding its final writes.
+    bool   getWroteBlock(int v)    { return wrote_[v].load(std::memory_order_relaxed); }
+
+    // Snapshot the karma~-style metadata for one voice. Safe from the control
+    // thread: position and play/rec come from one published word, so a report
+    // never pairs one block's transport state with another block's position.
+    // The loop bounds are cached in std::atomic<float> updated wherever loop
+    // start/end change.
+    VoiceInfo getVoiceInfo(int v) {
+        const uint64_t sn    = snap(v);
+        const int      st    = snapState(sn);
+        const float    start = loopStart_[v].load(std::memory_order_relaxed);
+        const float    end   = loopEnd_[v].load(std::memory_order_relaxed);
+        VoiceInfo info;
+        info.position  = snapPos(sn);
+        info.play      = (st & 1) ? 1 : 0;
+        info.rec       = (st & 2) ? 1 : 0;
+        info.startSec  = start;
+        info.endSec    = end;
+        info.windowSec = end - start;
+        info.state     = st;
+        return info;
+    }
+
+    // returns true (once) when a voice's quantized phase has changed since the
+    // last call; used to throttle phase reporting to the host.
+    bool checkQuantPhaseChanged(int v) {
+        const softcut::phase_t q = cut_.getQuantPhase(v);
+        if (q != lastQuant_[v]) { lastQuant_[v] = q; return true; }
+        return false;
+    }
+
+private:
+    // One word carries the whole poll snapshot: the transport code (rec<<1 |
+    // play) in the high half, the loop-normalized position (float bits) in the
+    // low half. Written only by the audio thread, read by anyone.
+    static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
+                  "the poll snapshot must be lock-free: the audio thread writes it");
+
+    static uint64_t packSnap(int st, float pos) {
+        uint32_t bits;
+        std::memcpy(&bits, &pos, sizeof bits);
+        return (static_cast<uint64_t>(static_cast<uint32_t>(st)) << 32) | bits;
+    }
+    static int   snapState(uint64_t sn) { return static_cast<int>(sn >> 32); }
+    static float snapPos(uint64_t sn) {
+        const uint32_t bits = static_cast<uint32_t>(sn);
+        float pos;
+        std::memcpy(&pos, &bits, sizeof pos);
+        return pos;
+    }
+    uint64_t snap(int v) const { return pubSnap_[v].load(std::memory_order_acquire); }
+
+    void publishSnap(int v) {
+        const float start = loopStart_[v].load(std::memory_order_relaxed);
+        const float end   = loopEnd_[v].load(std::memory_order_relaxed);
+        const float win   = end - start;
+        const float pos   = static_cast<float>(cut_.getSavedPosition(v));  // buffer seconds
+        float norm = win > 1e-9f ? (pos - start) / win : 0.f;
+        norm = norm < 0.f ? 0.f : (norm > 1.f ? 1.f : norm);
+        const int st = (cut_.getRecFlag(v) ? 2 : 0) | (cut_.getPlayFlag(v) ? 1 : 0);
+        pubSnap_[v].store(packSnap(st, norm), std::memory_order_release);
+    }
+
+    // one <= kMaxBlock chunk; the queue is already drained by the caller.
+    void processChunk(const double *const *ins, double *const *voiceOuts, int nframes,
+                      float *const *bufs, const size_t *rawFrames,
+                      double *mixL, double *mixR) {
         // the equal-power pan mix is only computed when a host actually wants it
         const bool wantMix = (mixL != nullptr || mixR != nullptr);
         if (wantMix)
@@ -266,12 +370,19 @@ public:
 
             float       *buf    = bufs ? bufs[dst] : nullptr;
             const size_t frames = (buf && rawFrames) ? usableFrames(rawFrames[dst]) : 0;
-            if (enabled_[dst] && buf && frames >= 1) {
+            const bool   active = enabled_[dst] && buf && frames >= 1;
+            // the record flag only changes at the drain above or at the end of
+            // processBlock (record-once completion), so its value here says
+            // whether this chunk writes to the buffer.
+            const bool   writing = active && cut_.getRecFlag(dst);
+            if (active) {
                 cut_.setVoiceBuffer(dst, buf, frames);
                 cut_.processBlock(dst, recIn_, outScratch_, nframes);
             } else {
                 for (int i = 0; i < nframes; ++i) outScratch_[i] = 0.f;
             }
+            if (writing) wrote_[dst].store(true, std::memory_order_relaxed);
+            publishSnap(dst);
 
             // retain raw output for next block's feedback
             for (int i = 0; i < nframes; ++i) curOut[dst][i] = outScratch_[i];
@@ -293,48 +404,8 @@ public:
 
         if (mixL) for (int i = 0; i < nframes; ++i) mixL[i] = static_cast<double>(mixLf_[i]);
         if (mixR) for (int i = 0; i < nframes; ++i) mixR[i] = static_cast<double>(mixRf_[i]);
-        updatePhases();
     }
 
-    // ---- phase poll (safe from any thread) -----------------------------
-    double getSavedPosition(int v) { return cut_.getSavedPosition(v); }
-    double getQuantPhase(int v)    { return cut_.getQuantPhase(v); }
-    bool   getPlayFlag(int v)      { return cut_.getPlayFlag(v); }
-    bool   getRecFlag(int v)       { return cut_.getRecFlag(v); }
-    bool   getEnabled(int v)       { return enabled_[v]; }
-
-    // Snapshot the karma~-style metadata for one voice. Safe from the control
-    // thread: play/rec/position read softcut atomics, and the loop bounds are
-    // cached in std::atomic<float> updated wherever loop start/end change.
-    VoiceInfo getVoiceInfo(int v) {
-        const float start = loopStart_[v].load(std::memory_order_relaxed);
-        const float end   = loopEnd_[v].load(std::memory_order_relaxed);
-        const float pos   = cut_.getSavedPosition(v);   // absolute buffer seconds
-        const float win   = end - start;
-        float norm = win > 1e-9f ? (pos - start) / win : 0.f;
-        norm = norm < 0.f ? 0.f : (norm > 1.f ? 1.f : norm);
-        const bool play = cut_.getPlayFlag(v);
-        const bool rec  = cut_.getRecFlag(v);
-        VoiceInfo info;
-        info.position  = norm;
-        info.play      = play ? 1 : 0;
-        info.rec       = rec ? 1 : 0;
-        info.startSec  = start;
-        info.endSec    = end;
-        info.windowSec = win;
-        info.state     = (rec ? 2 : 0) | (play ? 1 : 0);
-        return info;
-    }
-
-    // returns true (once) when a voice's quantized phase has changed since the
-    // last call; used to throttle phase reporting to the host.
-    bool checkQuantPhaseChanged(int v) {
-        const softcut::phase_t q = cut_.getQuantPhase(v);
-        if (q != lastQuant_[v]) { lastQuant_[v] = q; return true; }
-        return false;
-    }
-
-private:
     bool cmd(CmdId id, int v, float val) {
         Command c{id, (int16_t)v, 0, val};
         return queue_.push(c);
@@ -442,6 +513,8 @@ private:
     SpscQueue<Command, kQueueCap>   queue_;
     double                          sampleRate_ = 48000.0;
     softcut::phase_t                lastQuant_[NumVoices];
+    std::atomic<uint64_t>           pubSnap_[NumVoices];    // state<<32 | position
+    std::atomic<bool>               wrote_[NumVoices];      // buffer written last block
     std::atomic<float>              loopStart_[NumVoices];  // cached loop bounds
     std::atomic<float>              loopEnd_[NumVoices];    // (seconds) for reports
     softcut::LogRamp                outLevel_[NumVoices];

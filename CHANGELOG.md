@@ -17,6 +17,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no state machine. Backed by the engine's `getVoiceInfo`/`VoiceInfo`, which
   caches the (otherwise write-only) loop bounds. Covered by `test_voice_info`.
 
+### Fixed
+
+- `poll` no longer races with the audio thread. `Voice::playFlag`/`recFlag` are
+  plain bools that the DSP thread clears when a record-once pass finishes, so
+  reading them from the control thread was undefined behavior. The engine now
+  publishes one 64-bit snapshot per voice from the audio thread at the end of
+  every processed chunk -- transport code (`rec<<1|play`) in the high half,
+  loop-normalized position in the low half -- and `getVoiceInfo` unpacks both
+  from a single load, so an `info` report cannot pair one block's state with
+  another block's position. `test_poll_during_record_once` exercises the path;
+  ThreadSanitizer reports the old read path and is clean on the new one.
+
+- The report clock no longer outlives the engine. Both externals freed the
+  engine before the `@report` clock, and the clock callback reads the engine
+  from the scheduler thread, so deleting an object with reports armed could
+  dereference freed memory under Overdrive. The clock is now freed first.
+
+- A record-once pass now marks its `buffer~` dirty. The wrappers keyed
+  `buffer_setdirty` on the record flag still being set after `process()`, but a
+  record-once pass clears that flag inside the same call that performs its last
+  writes. When the loop window is shorter than one signal vector the whole pass
+  fits in one block and the buffer was never marked dirty at all. The engine now
+  reports `getWroteBlock(voice)` and the wrappers key on that.
+
+- Signal vectors larger than 8192 samples are split into 8192-sample chunks
+  instead of clamped. The engine's scratch buffers and feedback store hold one
+  chunk, so a clamped pass left every output sample past 8192 unwritten (stale
+  audio). Splitting keeps the feedback bus one chunk delayed rather than one
+  vector delayed; no other host-visible behavior changes.
+
 ### Changed
 
 - The `poll` message now emits the richer `info` list in place of the former

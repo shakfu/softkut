@@ -198,8 +198,11 @@ void mcsoftkut_perform64(t_mcsoftkut *x, t_object *dsp64, double **ins, long num
 
     x->engine->process(voiceIns, voiceOuts, (int)vec, samps, frames, mixL, mixR);
 
+    // mark written-into buffers dirty, then release all locks. getWroteBlock()
+    // covers a record-once pass, which clears the record flag inside the same
+    // process() call that performs its last writes.
     for (int v = 0; v < nv; ++v)
-        if (samps[v] && x->engine->getEnabled(v) && x->engine->getRecFlag(v))
+        if (samps[v] && x->engine->getWroteBlock(v))
             buffer_setdirty(buffer_ref_getobject(x->vbuf[v]));
     for (int k = 0; k < nlocked; ++k)
         buffer_unlocksamples(lockedObj[k]);
@@ -323,10 +326,13 @@ void *mcsoftkut_new(t_symbol *s, long argc, t_atom *argv)
 void mcsoftkut_free(t_mcsoftkut *x)
 {
     dsp_free((t_pxobject *)x);
+    // the clock goes first: its callback runs on the scheduler thread and reads
+    // the engine, so freeing the engine while a report is still armed is a
+    // use-after-free. object_free() on a clock unsets it.
+    if (x->tclock) object_free(x->tclock);
     if (x->engine) delete x->engine;
     for (int v = 0; v < MC_MAX_VOICES; ++v)
         if (x->vbuf[v]) object_free(x->vbuf[v]);
-    if (x->tclock) object_free(x->tclock);
     if (x->zeroIn) sysmem_freeptr(x->zeroIn);
 }
 

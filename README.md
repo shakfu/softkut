@@ -154,10 +154,11 @@ With `@report <ms>` set to a non-zero interval, the report outlet also automatic
 | Message | Args | Description |
 |---|---|---|
 | `inlevel` | `<inlet> <voice> <gain>` | Route signal `inlet` (0..5) into `voice`'s record input at `gain`. Defaults to identity (inlet *v* -> voice *v* at unity); the off-diagonal lets one input feed several voices. |
-| `feedback` | `<src> <dst> <gain>` | Route voice `src`'s output into voice `dst`'s record input at `gain` (one block delayed). Enables overdub/looping networks; self-feedback (`src == dst`) is allowed — mind stability. |
+| `feedback` | `<src> <dst> <gain>` | Route voice `src`'s *pre-`level`* output into voice `dst`'s record input at `gain` (one block delayed). `level` is an output gain only, so changing it does not alter a feedback network (this matches softcut/norns). Enables overdub/looping networks; self-feedback (`src == dst`) is allowed — mind stability. |
 
 A voice's record input is therefore: `sum over inlets ( inlet * inlevel[inlet][voice] ) + sum over
-src ( voiceOutput[src] * feedback[src][voice] )`.
+src ( rawVoiceOutput[src] * feedback[src][voice] )`, where `rawVoiceOutput` is the voice's softcut
+output before `level` and `pan` are applied.
 
 ### Global
 
@@ -198,7 +199,7 @@ voicebuf 0 bufL  ,  voicebuf 1 bufR
 **Feedback overdub** — feed voice 0 into voice 1 to build layers:
 
 ```
-feedback 0 1 0.8     (voice 0 output -> voice 1 record at 0.8)
+feedback 0 1 0.8     (voice 0 raw output -> voice 1 record at 0.8)
 ```
 
 ## Multichannel variant: `mc.softkut~`

@@ -193,9 +193,11 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
 
     x->engine->process(ins, voiceOuts, (int)vec, samps, frames, mixL, mixR);
 
-    // mark recorded-into buffers dirty, then release all locks
+    // mark written-into buffers dirty, then release all locks. getWroteBlock()
+    // covers a record-once pass, which clears the record flag inside the same
+    // process() call that performs its last writes.
     for (int v = 0; v < nv; ++v)
-        if (samps[v] && x->engine->getEnabled(v) && x->engine->getRecFlag(v))
+        if (samps[v] && x->engine->getWroteBlock(v))
             buffer_setdirty(buffer_ref_getobject(x->vbuf[v]));
     for (int k = 0; k < nlocked; ++k)
         buffer_unlocksamples(lockedObj[k]);
@@ -311,10 +313,13 @@ void *softkut_new(t_symbol *s, long argc, t_atom *argv)
 void softkut_free(t_softkut *x)
 {
     dsp_free((t_pxobject *)x);
+    // the clock goes first: its callback runs on the scheduler thread and reads
+    // the engine, so freeing the engine while a report is still armed is a
+    // use-after-free. object_free() on a clock unsets it.
+    if (x->tclock) object_free(x->tclock);
     if (x->engine) delete x->engine;
     for (int v = 0; v < NumVoices; ++v)
         if (x->vbuf[v]) object_free(x->vbuf[v]);
-    if (x->tclock) object_free(x->tclock);
 }
 
 // ---------------------------------------------------------------------------

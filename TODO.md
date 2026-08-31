@@ -1,5 +1,9 @@
 # TODO
 
+Max-side behavior that `make test` cannot reach (MC negotiation, `buffer~`
+notifications, dirty state, clock teardown) has a manual checklist in
+`docs/dev/manual-tests.md`.
+
 ## Expose fade-curve shaping (deferred)
 
 **Status:** investigated, deferred to a future session. This is the one remaining

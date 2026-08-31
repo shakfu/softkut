@@ -4,7 +4,7 @@ externals/
 extensions
 support
 sysbuild
-tests
+/tests/
 tmp
 
 .*_cache
