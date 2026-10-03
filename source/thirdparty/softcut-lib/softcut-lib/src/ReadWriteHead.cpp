@@ -182,10 +182,10 @@ void ReadWriteHead::calcFadeInc() {
     fadeInc = std::max(0.f, std::min(fadeInc, 1.f));
 }
 
-void ReadWriteHead::setBuffer(float *b, uint32_t bf) {
+void ReadWriteHead::setBuffer(float *b, uint32_t bf, uint32_t stride) {
     buf = b;
-    head[0].setBuffer(b, bf);
-    head[1].setBuffer(b, bf);
+    head[0].setBuffer(b, bf, stride);
+    head[1].setBuffer(b, bf, stride);
 }
 
 void ReadWriteHead::setLoopFlag(bool val) {
@@ -253,4 +253,7 @@ void ReadWriteHead::stop() {
 
 void ReadWriteHead::run() {
     head[active].setState(State::Playing);
+    // softkut patch: only cutToPhase() set active_, so a head started by the
+    // play/rec flag without a prior position cut never checked the loop bounds.
+    head[active].active_ = true;
 }

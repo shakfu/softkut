@@ -9,11 +9,12 @@
 
 	<description>
 		softkut~ wraps monome's softcut-lib (the norns looping engine). It provides six independent
-		voices that read and write a shared (or per-voice) mono buffer~, with sub-sample looping,
+		voices that read and write a shared (or per-voice) buffer~, with sub-sample looping,
 		crossfaded overdub, resampling read/write heads, per-voice input and output multimode
 		filters, per-voice output level, and inlet-to-voice and voice-to-voice routing
 		matrices. Most messages address a single voice as &lt;voice&gt; in the range 0-5; times are
-		in seconds. The buffer~ must be mono, and only its largest power-of-two prefix is used.
+		in seconds of buffer material. Any buffer~ works: any length, any channel count (each voice
+		uses one channel), and its own sample rate (rate 1 plays at recorded speed).
 	</description>
 
 
@@ -102,9 +103,10 @@
 
 	<objarglist>
 		<objarg name="buffer-name" optional="1" type="symbol">
-			<digest>Name of the shared mono buffer~</digest>
+			<digest>Name of the shared buffer~</digest>
 			<description>
-				Sets the mono buffer~ that all voices read and write. Can be changed later with
+				Sets the buffer~ that all voices read and write; voice v uses channel v mod the
+				buffer~'s channel count. Can be changed later with
 				the set message, or overridden per voice with voicebuf.
 			</description>
 		</objarg>
@@ -476,18 +478,20 @@
 		<method name="set">
 			<arglist>
 				<arg name="buffer-name" type="symbol" optional="0" />
+				<arg name="channel" type="int" optional="1" />
 			</arglist>
 			<digest>Set the shared buffer~</digest>
-			<description>Points all six voices at the named mono buffer~.</description>
+			<description>Points all voices at the named buffer~. With a 1-based channel, every voice uses it; without, voice v uses channel v mod the channel count.</description>
 		</method>
 
 		<method name="voicebuf">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
 				<arg name="buffer-name" type="symbol" optional="0" />
+				<arg name="channel" type="int" optional="1" />
 			</arglist>
 			<digest>Set one voice's buffer~</digest>
-			<description>Points a single voice at its own mono buffer~, overriding the shared default (e.g. for stereo).</description>
+			<description>Points a single voice at its own buffer~ and optional 1-based channel, overriding set.</description>
 		</method>
 
 		<method name="inlevel">

@@ -1,0 +1,23 @@
+[project]
+name = "softkut"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Shakeeb Alireza", email = "shakeeb.alireza@rezayat.net" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "py2max[graph]>=0.4.1",
+]
+
+[project.scripts]
+softkut = "softkut:main"
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+# scripts only (scripts/make_help.py): install dependencies, do not build a package
+package = false

@@ -122,8 +122,9 @@ void SubHead::poke(float in, float pre, float rec) {
 #if 0 // lowpass filter
         lpf_.processSample(&y);
 #endif
-        buf_[wrIdx_] *= preFade_;
-        buf_[wrIdx_] += y * recFade_;
+        sample_t &dst = buf_[static_cast<size_t>(wrIdx_) * stride_];
+        dst *= preFade_;
+        dst += y * recFade_;
 
         wrIdx_ = wrapBufIndex(wrIdx_ + inc_dir_);
     }
@@ -140,19 +141,23 @@ float SubHead::peek4() {
     int phase2 = phase1 + 1;
     int phase3 = phase1 + 2;
 
-    float y0 = buf_[wrapBufIndex(phase0)];
-    float y1 = buf_[wrapBufIndex(phase1)];
-    float y3 = buf_[wrapBufIndex(phase3)];
-    float y2 = buf_[wrapBufIndex(phase2)];
+    float y0 = buf_[static_cast<size_t>(wrapBufIndex(phase0)) * stride_];
+    float y1 = buf_[static_cast<size_t>(wrapBufIndex(phase1)) * stride_];
+    float y3 = buf_[static_cast<size_t>(wrapBufIndex(phase3)) * stride_];
+    float y2 = buf_[static_cast<size_t>(wrapBufIndex(phase2)) * stride_];
 
     auto x = static_cast<float>(phase_ - (float)phase1);
     return Interpolate::hermite<float>(x, y0, y1, y2, y3);
 }
 
+// softkut patch: wrap buffers of any length, not only powers of two. Indices
+// are almost always in range, so the modulo runs only off the fast path.
 unsigned int SubHead::wrapBufIndex(int x) {
-    x += bufFrames_;
-    // assert(x >= 0 /* buffer index before masking is non-negative */);
-    return x & bufMask_;
+    if (static_cast<unsigned int>(x) < bufFrames_) return static_cast<unsigned int>(x);
+    if (bufFrames_ == 0) return 0;      // no buffer yet (a cut before setBuffer)
+    const int n = static_cast<int>(bufFrames_);
+    const int m = x % n;
+    return static_cast<unsigned int>(m < 0 ? m + n : m);
 }
 
 void SubHead::setSampleRate(float sr) {
@@ -168,13 +173,16 @@ void SubHead::setPhase(phase_t phase) {
     // - resamp output doesn't need clearing b/c we write/read from beginning on each sample anyway
 }
 
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-// **NB** buffer size must be a power of two!!!!
-void SubHead::setBuffer(float *buf, unsigned int frames) {
+// softkut patch: any length; `stride` is the distance between consecutive
+// frames of this channel in an interleaved buffer (1 for mono).
+void SubHead::setBuffer(float *buf, unsigned int frames, unsigned int stride) {
     buf_  = buf;
-    bufFrames_ = frames;
-    bufMask_ = frames - 1;
-    assert((bufFrames_ != 0) && !(bufFrames_ & bufMask_) /*buffer size is not 2^N*/);
+    stride_ = stride ? stride : 1;
+    if (frames != bufFrames_) {
+        bufFrames_ = frames;
+        // poke() indexes with wrIdx_ before wrapping it: re-wrap for a shorter buffer
+        wrIdx_ = wrapBufIndex(static_cast<int>(wrIdx_));
+    }
 }
 
 void SubHead::setRate(rate_t rate) {

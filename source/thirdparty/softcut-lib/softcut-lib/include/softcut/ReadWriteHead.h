@@ -24,7 +24,7 @@ namespace softcut {
         void processSampleNoWrite(sample_t in, sample_t *out);
 
         void setSampleRate(float sr);
-        void setBuffer(sample_t *buf, uint32_t size);
+        void setBuffer(sample_t *buf, uint32_t size, uint32_t stride = 1);  // softkut patch: stride
         void setRate(rate_t x);
 
 	// set loop (region) start point in seconds

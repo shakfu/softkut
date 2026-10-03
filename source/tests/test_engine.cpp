@@ -6,9 +6,11 @@
 //
 // Self-contained: no external test framework. Exit code 0 = all pass.
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -41,6 +43,12 @@ static const int    NV = 6;
 static const double SR = 48000.0;
 typedef Engine<NV>  Eng;
 
+// A mono BufferView at the DSP rate; a null store makes the voice silent.
+static softkut::BufferView mono(float *p, size_t frames)
+{
+    return softkut::BufferView{p, p ? frames : 0, 1, 0.0};
+}
+
 // Run `total` samples through the engine in B-sized blocks with per-voice
 // buffers `bufs` (each `frames` long), feeding a constant `inval` to voice 0.
 // Optionally capture voice-0, voice-1, mix-L and mix-R outputs.
@@ -54,14 +62,14 @@ static void runPV(Eng &e, float *const bufs[NV], size_t frames, int total, doubl
     std::vector<double *> inp(NV), outp(NV);
     for (int v = 0; v < NV; ++v) { inp[v] = in[v].data(); outp[v] = out[v].data(); }
     std::vector<double> mL(B, 0.0), mR(B, 0.0);
-    size_t fr[NV];
-    for (int v = 0; v < NV; ++v) fr[v] = frames;
+    softkut::BufferView fr[NV];
+    for (int v = 0; v < NV; ++v) fr[v] = mono(bufs[v], frames);
 
     int done = 0;
     while (done < total) {
         int n = (total - done < B) ? (total - done) : B;
         for (int i = 0; i < n; ++i) in[0][i] = inval;
-        e.process(inp.data(), outp.data(), n, bufs, fr, mL.data(), mR.data());
+        e.process(inp.data(), outp.data(), n, fr, mL.data(), mR.data());
         if (cap0) for (int i = 0; i < n; ++i) cap0->push_back(out[0][i]);
         if (cap1) for (int i = 0; i < n; ++i) cap1->push_back(out[1][i]);
         if (capL) for (int i = 0; i < n; ++i) capL->push_back(mL[i]);
@@ -101,17 +109,6 @@ static void configPlay(Eng &e, int v, size_t F)
 }
 
 // ---------------------------------------------------------------------------
-static void test_usable_frames()
-{
-    std::printf("test_usable_frames\n");
-    CHECK(Eng::usableFrames(1024) == 1024);
-    CHECK(Eng::usableFrames(1000) == 512);
-    CHECK(Eng::usableFrames(5000) == 4096);
-    CHECK(Eng::usableFrames(3)    == 2);
-    CHECK(Eng::usableFrames(1)    == 1);
-    CHECK(Eng::usableFrames(0)    == 0);
-}
-
 static void test_spsc_queue()
 {
     std::printf("test_spsc_queue\n");
@@ -535,8 +532,8 @@ static void test_record_once_wrote_block()
     const size_t F = 8192;
     std::vector<float> buf(F, 0.f);
     float *bufs[NV];
-    size_t fr[NV];
-    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = F; }
+    softkut::BufferView fr[NV];
+    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = mono(bufs[v], F); }
 
     e.setLoopStart(0, 0.f);
     e.setLoopEnd(0, 0.002f);          // 96-sample loop, shorter than one block
@@ -557,7 +554,7 @@ static void test_record_once_wrote_block()
 
     int recSeen = 0, wroteSeen = 0;
     for (int blk = 0; blk < 8; ++blk) {
-        e.process(inp.data(), outp.data(), B, bufs, fr, NULL, NULL);
+        e.process(inp.data(), outp.data(), B, fr, NULL, NULL);
         if (e.getRecFlag(0))     ++recSeen;
         if (e.getWroteBlock(0))  ++wroteSeen;
     }
@@ -569,7 +566,7 @@ static void test_record_once_wrote_block()
     CHECK(wroteSeen == 1);     // ... and exactly the writing block reports it
 
     // a block with no recording reports no write
-    e.process(inp.data(), outp.data(), B, bufs, fr, NULL, NULL);
+    e.process(inp.data(), outp.data(), B, fr, NULL, NULL);
     CHECK(!e.getWroteBlock(0));
 }
 
@@ -609,8 +606,8 @@ static void test_block_split()
     std::vector<float> buf(F);
     for (size_t i = 0; i < F; ++i) buf[i] = std::sin((float)i * 0.01f);
     float *bufs[NV];
-    size_t fr[NV];
-    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = F; }
+    softkut::BufferView fr[NV];
+    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = mono(bufs[v], F); }
 
     const double kSentinel = -12345.0;
     std::vector<std::vector<double> > in(NV, std::vector<double>(N, 0.0));
@@ -625,7 +622,7 @@ static void test_block_split()
     std::vector<double *> outpA(NV);
     for (int v = 0; v < NV; ++v) outpA[v] = outA[v].data();
     std::vector<double> mixLA(N, kSentinel), mixRA(N, kSentinel);
-    a.process(inp.data(), outpA.data(), N, bufs, fr, mixLA.data(), mixRA.data());
+    a.process(inp.data(), outpA.data(), N, fr, mixLA.data(), mixRA.data());
 
     int unwritten = 0;
     for (int v = 0; v < NV; ++v)
@@ -649,7 +646,7 @@ static void test_block_split()
             inpB[v]  = in[v].data() + off;
             outpB[v] = outB[v].data() + off;
         }
-        b.process(inpB.data(), outpB.data(), n, bufs, fr,
+        b.process(inpB.data(), outpB.data(), n, fr,
                   mixLB.data() + off, mixRB.data() + off);
         off += n;
     }
@@ -678,8 +675,8 @@ static void test_poll_during_record_once()
     const size_t F = 8192;
     std::vector<float> buf(F, 0.f);
     float *bufs[NV];
-    size_t fr[NV];
-    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = F; }
+    softkut::BufferView fr[NV];
+    for (int v = 0; v < NV; ++v) { bufs[v] = buf.data(); fr[v] = mono(bufs[v], F); }
 
     const float endSec = (float)F / (float)SR;
     e.setLoopStart(0, 0.f);
@@ -714,7 +711,7 @@ static void test_poll_during_record_once()
 
     bool finished = false;
     for (int blk = 0; blk < 1000 && !finished; ++blk) {
-        e.process(inp.data(), outp.data(), B, bufs, fr, NULL, NULL);
+        e.process(inp.data(), outp.data(), B, fr, NULL, NULL);
         if (!e.getRecFlag(0)) finished = true;
     }
     done.store(true, std::memory_order_relaxed);
@@ -725,10 +722,531 @@ static void test_poll_during_record_once()
     CHECK(bad.load() == 0);
 }
 
+// sanitize() clamps each unsafe parameter into its range and rejects non-finite
+// values.
+static void test_sanitize()
+{
+    std::printf("test_sanitize\n");
+    using softkut::CmdId;
+    using softkut::Check;
+    using softkut::sanitize;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    float v;
+
+    v = nan;   CHECK(sanitize(CmdId::Rate, v, SR) == Check::Rejected);
+    v = inf;   CHECK(sanitize(CmdId::Level, v, SR) == Check::Rejected);
+    v = -inf;  CHECK(sanitize(CmdId::FbLevel, v, SR) == Check::Rejected);
+
+    v = 1.5f;  CHECK(sanitize(CmdId::Rate, v, SR) == Check::Ok);    CHECK(v == 1.5f);
+    v = 100.f; CHECK(sanitize(CmdId::Rate, v, SR) == Check::Clamped); CHECK(v == 64.f);
+    v = -1e9f; CHECK(sanitize(CmdId::Rate, v, SR) == Check::Clamped); CHECK(v == -64.f);
+    v = -1.f;  sanitize(CmdId::PostFilterRq, v, SR); CHECK(v == softkut::kMinRq);
+    v = 0.f;   sanitize(CmdId::PreFilterRq, v, SR);  CHECK(v == softkut::kMinRq);
+    v = 1.5f;  sanitize(CmdId::PreLevel, v, SR);     CHECK(v == 1.f);
+    v = -0.5f; sanitize(CmdId::PreLevel, v, SR);     CHECK(v == 0.f);
+    v = 1e6f;  sanitize(CmdId::RecLevel, v, SR);     CHECK(v == 1.f);
+    v = -1.f;  sanitize(CmdId::LoopStart, v, SR);    CHECK(v == 0.f);
+    v = -1.f;  sanitize(CmdId::RecPreSlewTime, v, SR); CHECK(v == 0.f);
+    v = -1.f;  sanitize(CmdId::LevelSlewTime, v, SR);  CHECK(v == 0.f);
+    v = 1e30f; sanitize(CmdId::Position, v, SR);
+    CHECK((double)v * SR <= softkut::kMaxFrames);
+    v = -1e30f; sanitize(CmdId::RecOffset, v, SR);
+    CHECK((double)v * SR >= -softkut::kMaxFrames);
+    // gains are unbounded: only finiteness is required
+    v = 5.f;   CHECK(sanitize(CmdId::FbLevel, v, SR) == Check::Ok);
+    v = -0.1f; CHECK(sanitize(CmdId::RecOffset, v, SR) == Check::Ok);
+}
+
+// Every parameter, at extreme values, must leave the buffer and the output
+// finite and bounded while the voice records over itself with feedback.
+// Before validation, rq < 0 or a negative slew wrote NaN into the buffer and
+// |rate| >= 100 crashed the resampler.
+static void test_extreme_values_stay_finite()
+{
+    std::printf("test_extreme_values_stay_finite\n");
+    const float vals[] = {-1e30f, -1e6f, -100.f, -1.f, 0.f, 1.5f, 100.f, 1e6f, 1e30f,
+                          std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::infinity()};
+    const int nIds = (int)softkut::CmdId::PhaseOffset + 1;
+    const size_t F = 4096;
+    int bad = 0;
+    for (int id = 0; id < nIds; ++id) {
+        for (float val : vals) {
+            Eng e;
+            e.setSampleRate(SR);
+            e.setNumVoices(1);
+            std::vector<float> buf(F);
+            for (size_t i = 0; i < F; ++i) buf[i] = 0.5f * std::sin((float)i * 0.05f);
+            e.setLoopStart(0, 0.f);
+            e.setLoopEnd(0, (float)F / (float)SR);
+            e.setPreLevel(0, 0.5f);
+            e.setRecFlag(0, true);
+            e.setPlayFlag(0, true);
+            e.setFeedback(0, 0, 1.f);
+            e.cutToPos(0, 0.f);
+            e.push(softkut::Command{(softkut::CmdId)id, 0, 0, val});
+
+            std::vector<double> cap;
+            run(e, buf.data(), F, (int)F * 8, 0.3, &cap);
+            bool ok = true;
+            for (float s : buf) if (!std::isfinite(s) || std::fabs(s) > 1e3f) ok = false;
+            // output may carry a large but finite user gain (level, filter mix)
+            for (double s : cap) if (!std::isfinite(s)) ok = false;
+            if (!ok) {
+                ++bad;
+                std::printf("  cmd %d value %g: non-finite or runaway buffer\n", id, (double)val);
+            }
+        }
+    }
+    CHECK(bad == 0);
+}
+
+// Play a [0, loopSec] loop and return the furthest saved position (seconds)
+// reached over `seconds` of audio at the engine's current rate.
+static double maxLoopPosition(Eng &e, std::vector<float> &buf, double sr, double seconds)
+{
+    double maxPos = 0.0;
+    const int total = (int)(sr * seconds), B = 64;
+    for (int done = 0; done < total; done += B) {
+        run(e, buf.data(), buf.size(), B, 0.0, NULL);
+        const double p = e.getSavedPosition(0);
+        if (p > maxPos) maxPos = p;
+    }
+    return maxPos;
+}
+
+// softcut stores loop points as frames at the rate current when they were set.
+// A later sample-rate change must not rescale the loop in seconds.
+static void test_samplerate_change_keeps_loop()
+{
+    std::printf("test_samplerate_change_keeps_loop\n");
+    const double rates[] = {96000.0, 44100.0};
+    for (double sr2 : rates) {
+        Eng e;
+        e.setSampleRate(SR);
+        e.setNumVoices(1);
+        std::vector<float> buf(1 << 18, 0.f);
+        e.setLoopStart(0, 0.f);
+        e.setLoopEnd(0, 0.25f);
+        e.setFadeTime(0, 0.001f);
+        e.cutToPos(0, 0.f);
+        e.setPlayFlag(0, true);
+        run(e, buf.data(), buf.size(), 64, 0.0, NULL);   // apply at 48 kHz
+
+        e.setSampleRate(sr2);
+        e.cutToPos(0, 0.f);
+        CHECK_NEAR(maxLoopPosition(e, buf, sr2, 1.0), 0.25, 0.005);
+    }
+
+    // the constructor's default 1 s loop must also be 1 s at a non-default rate
+    Eng d;
+    d.setSampleRate(44100.0);
+    d.setNumVoices(1);
+    std::vector<float> buf(1 << 18, 0.f);
+    d.setFadeTime(0, 0.001f);
+    d.cutToPos(0, 0.f);
+    d.setPlayFlag(0, true);
+    CHECK_NEAR(maxLoopPosition(d, buf, 44100.0, 2.5), 1.0, 0.005);
+}
+
+// Max delivers messages on the main and the scheduler thread at once
+// (Overdrive). Two producers pushing concurrently must lose no command.
+static void test_concurrent_producers()
+{
+    std::printf("test_concurrent_producers\n");
+    Eng e;
+    e.setSampleRate(SR);
+    e.setNumVoices(2);
+    const int K = 200000;
+
+    std::atomic<bool> stop(false);
+    std::thread consumer([&]() {
+        const int B = 64;
+        std::vector<std::vector<double> > in(NV, std::vector<double>(B, 0.0));
+        std::vector<std::vector<double> > out(NV, std::vector<double>(B, 0.0));
+        std::vector<const double *> inp(NV);
+        std::vector<double *>       outp(NV);
+        for (int v = 0; v < NV; ++v) { inp[v] = in[v].data(); outp[v] = out[v].data(); }
+        while (!stop.load(std::memory_order_relaxed))
+            e.process(inp.data(), outp.data(), B, NULL, NULL, NULL);
+    });
+    auto producer = [&](int voice) {
+        for (int i = 0; i < K; ++i)
+            while (!e.setRate(voice, 1.f + (float)(i % 7) * 0.1f)) std::this_thread::yield();
+    };
+    std::thread p0(producer, 0), p1(producer, 1);
+    p0.join();
+    p1.join();
+
+    // wait (bounded) for the consumer to drain what was queued
+    for (int i = 0; i < 100000 && e.pending() > 0; ++i) std::this_thread::yield();
+    stop.store(true, std::memory_order_relaxed);
+    consumer.join();
+
+    CHECK(e.pending() == 0);
+    CHECK(e.handled() == (uint64_t)(2 * K));
+}
+
+// Furthest and nearest saved positions (seconds) over `seconds` of audio,
+// ignoring the first `settle` seconds.
+static void positionRange(Eng &e, std::vector<float> &buf, double seconds, double settle,
+                          double *lo, double *hi)
+{
+    *lo = 1e9; *hi = -1e9;
+    const int total = (int)(SR * seconds), skip = (int)(SR * settle), B = 64;
+    for (int done = 0; done < total; done += B) {
+        run(e, buf.data(), buf.size(), B, 0.0, NULL);
+        if (done < skip) continue;
+        const double p = e.getSavedPosition(0);
+        if (p < *lo) *lo = p;
+        if (p > *hi) *hi = p;
+    }
+}
+
+// Starting a voice with the play or rec flag alone, without a `position` cut,
+// must respect the loop. softcut's run() left the head without its active
+// flag, so it ran through the whole buffer and wrapped only at its end.
+static void test_play_without_position_loops()
+{
+    std::printf("test_play_without_position_loops\n");
+    double lo, hi;
+    {   // loop at the buffer start, play flag only
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        std::vector<float> buf(1 << 18, 0.f);
+        e.setLoopStart(0, 0.f); e.setLoopEnd(0, 0.25f); e.setFadeTime(0, 0.001f);
+        e.setPlayFlag(0, true);
+        positionRange(e, buf, 1.0, 0.0, &lo, &hi);
+        CHECK_NEAR(hi, 0.25, 0.005);
+    }
+    {   // loop away from the head's initial phase: the head jumps into it
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        std::vector<float> buf(1 << 18, 0.f);
+        e.setLoopStart(0, 0.5f); e.setLoopEnd(0, 0.75f); e.setFadeTime(0, 0.001f);
+        e.setPlayFlag(0, true);
+        positionRange(e, buf, 1.0, 0.02, &lo, &hi);
+        CHECK(lo >= 0.5 - 0.005);
+        CHECK(hi <= 0.75 + 0.005);
+    }
+    {   // rec flag only
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        std::vector<float> buf(1 << 18, 0.f);
+        e.setLoopStart(0, 0.f); e.setLoopEnd(0, 0.25f); e.setFadeTime(0, 0.001f);
+        e.setRecFlag(0, true);
+        positionRange(e, buf, 1.0, 0.0, &lo, &hi);
+        CHECK_NEAR(hi, 0.25, 0.005);
+    }
+}
+
+// A null input pointer is silence: mc.softkut~ passes null for voices past
+// the connected channel count instead of a buffer that dsp64 reallocates.
+static void test_null_input_is_silence()
+{
+    std::printf("test_null_input_is_silence\n");
+    Eng e;
+    e.setSampleRate(SR);
+    e.setNumVoices(2);
+    const size_t F = 8192;
+    std::vector<float> buf(F, 0.5f);
+    configPlay(e, 1, F);
+    e.setRecFlag(1, true);            // overwrite (pre 0) with the null input
+
+    const int B = 64;
+    std::vector<double> in0(B, 1.0), out0(B), out1(B);
+    const double *ins[NV]  = {in0.data(), NULL};
+    double       *outs[NV] = {out0.data(), out1.data()};
+    float        *bufs[NV] = {NULL, buf.data()};   // voice 0 has no buffer
+    softkut::BufferView fr[NV] = {mono(bufs[0], 0), mono(bufs[1], F)};
+    for (int done = 0; done < (int)F * 2; done += B)
+        e.process(ins, outs, B, fr, NULL, NULL);
+
+    double maxAbs = 0.0;
+    for (size_t i = F / 4; i < (F * 3) / 4; ++i)
+        maxAbs = std::max(maxAbs, (double)std::fabs(buf[i]));
+    CHECK(maxAbs < 1e-3);             // recorded silence over the old content
+}
+
+// The host may set the sample rate while the audio thread processes (Max
+// recompiles a running chain). The request is applied by process(), so the
+// engine stays consistent. Meaningful under -fsanitize=thread.
+static void test_samplerate_set_during_process()
+{
+    std::printf("test_samplerate_set_during_process\n");
+    Eng e;
+    e.setSampleRate(SR);
+    e.setNumVoices(1);
+    const size_t F = 8192;
+    std::vector<float> buf(F);
+    for (size_t i = 0; i < F; ++i) buf[i] = std::sin((float)i * 0.01f);
+    configPlay(e, 0, F);
+
+    std::atomic<bool> done(false);
+    std::thread host([&]() {
+        for (int i = 0; !done.load(std::memory_order_relaxed); ++i)
+            e.setSampleRate(i & 1 ? 96000.0 : 48000.0);
+    });
+    std::vector<double> cap;
+    run(e, buf.data(), F, (int)F * 16, 0.0, &cap);
+    done.store(true, std::memory_order_relaxed);
+    host.join();
+
+    int bad = 0;
+    for (double s : cap) if (!std::isfinite(s) || std::fabs(s) > 2.0) ++bad;
+    CHECK(bad == 0);
+    e.setSampleRate(44100.0);
+    CHECK(e.getSampleRate() == 44100.0);   // control side sees the request at once
+}
+
+// Process `total` samples on voices 0..nv-1 with explicit views, feeding
+// `inval` to every voice. Captures voice 0 and voice 1 when asked.
+static void runViews(Eng &e, const softkut::BufferView *views, int total, double inval,
+                     std::vector<double> *cap0, std::vector<double> *cap1)
+{
+    const int B = 64;
+    std::vector<std::vector<double> > in(NV, std::vector<double>(B, inval));
+    std::vector<std::vector<double> > out(NV, std::vector<double>(B, 0.0));
+    std::vector<const double *> inp(NV);
+    std::vector<double *>       outp(NV);
+    for (int v = 0; v < NV; ++v) { inp[v] = in[v].data(); outp[v] = out[v].data(); }
+    for (int done = 0; done < total; done += B) {
+        e.process(inp.data(), outp.data(), B, views, NULL, NULL);
+        if (cap0) cap0->insert(cap0->end(), out[0].begin(), out[0].end());
+        if (cap1) cap1->insert(cap1->end(), out[1].begin(), out[1].end());
+    }
+}
+
+static const float kGuard = 12345.f;   // sentinel past a view's last frame
+
+// A buffer of any length is used whole: recording over a full pass reaches its
+// last frame, and nothing past it is touched.
+static void test_any_length_buffer()
+{
+    std::printf("test_any_length_buffer\n");
+    const size_t F = 10000, G = 256;          // not a power of two
+    std::vector<float> store(F + G, 0.f);
+    for (size_t i = F; i < F + G; ++i) store[i] = kGuard;
+
+    Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+    softkut::BufferView views[NV] = {mono(store.data(), F)};
+    e.setLoopStart(0, 0.f);
+    e.setLoopEnd(0, (float)F / (float)SR);
+    e.setFadeTime(0, 0.001f);
+    e.cutToPos(0, 0.f);
+    e.setRecFlag(0, true);
+    e.setPlayFlag(0, true);
+    runViews(e, views, (int)F * 3, 0.5, NULL, NULL);
+
+    int written = 0;
+    for (size_t i = 8192; i < F - 64; ++i) if (store[i] != 0.f) ++written;
+    CHECK(written == (int)(F - 64 - 8192));   // frames past the old pow2 prefix
+    int guard = 0;
+    for (size_t i = F; i < F + G; ++i) if (store[i] != kGuard) ++guard;
+    CHECK(guard == 0);
+}
+
+// Loop points past the end of the buffer wrap modulo its length rather than
+// reading or writing out of bounds.
+static void test_loop_past_buffer_end()
+{
+    std::printf("test_loop_past_buffer_end\n");
+    const size_t F = 3000, G = 256;
+    std::vector<float> store(F + G, 0.f);
+    for (size_t i = F; i < F + G; ++i) store[i] = kGuard;
+
+    Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+    softkut::BufferView views[NV] = {mono(store.data(), F)};
+    e.setLoopStart(0, 0.f);
+    e.setLoopEnd(0, 1.0f);                     // 48000 frames over a 3000-frame buffer
+    e.setRecFlag(0, true);
+    e.setPlayFlag(0, true);
+    e.cutToPos(0, 0.5f);
+    std::vector<double> cap;
+    runViews(e, views, 48000, 0.25, &cap, NULL);
+
+    int guard = 0;
+    for (size_t i = F; i < F + G; ++i) if (store[i] != kGuard) ++guard;
+    CHECK(guard == 0);
+    int bad = 0;
+    for (double s : cap) if (!std::isfinite(s) || std::fabs(s) > 2.0) ++bad;
+    CHECK(bad == 0);
+}
+
+// An interleaved store is read and written one channel at a time.
+static void test_interleaved_channels()
+{
+    std::printf("test_interleaved_channels\n");
+    const size_t F = 4096;
+    const unsigned C = 2;
+    std::vector<float> store(F * C);
+    for (size_t i = 0; i < F; ++i) { store[i * C] = 0.5f; store[i * C + 1] = -0.5f; }
+
+    Eng e; e.setSampleRate(SR); e.setNumVoices(2);
+    softkut::BufferView views[NV] = {
+        softkut::BufferView{store.data(),     F, C, 0.0},
+        softkut::BufferView{store.data() + 1, F, C, 0.0}};
+    configPlay(e, 0, F);
+    configPlay(e, 1, F);
+    std::vector<double> cap0, cap1;
+    runViews(e, views, (int)F, 0.0, &cap0, &cap1);
+    CHECK(midMean(cap0) > 0.4);                 // voice 0 reads channel 1
+    CHECK(midMean(cap1) < -0.4);                // voice 1 reads channel 2
+
+    // recording on voice 0 writes channel 1 only
+    e.setRecFlag(0, true);
+    runViews(e, views, (int)F * 2, 0.0, NULL, NULL);
+    int ch1Changed = 0, ch2Changed = 0;
+    for (size_t i = F / 4; i < (F * 3) / 4; ++i) {
+        if (store[i * C] != 0.5f) ++ch1Changed;
+        if (store[i * C + 1] != -0.5f) ++ch2Changed;
+    }
+    CHECK(ch1Changed > 0);
+    CHECK(ch2Changed == 0);
+}
+
+// A buffer that shrinks between blocks while recording must not be written
+// past its new end (the write index is re-wrapped).
+static void test_buffer_shrinks_while_recording()
+{
+    std::printf("test_buffer_shrinks_while_recording\n");
+    const size_t F = 10000, S = 3000;
+    std::vector<float> store(F, 0.f);
+
+    Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+    softkut::BufferView views[NV] = {mono(store.data(), F)};
+    e.setLoopStart(0, 0.f);
+    e.setLoopEnd(0, (float)F / (float)SR);
+    e.cutToPos(0, 0.f);
+    e.setRecFlag(0, true);
+    e.setPlayFlag(0, true);
+    runViews(e, views, 8000, 0.5, NULL, NULL);   // write index near frame 8000
+
+    for (size_t i = S; i < F; ++i) store[i] = kGuard;
+    views[0].frames = S;
+    runViews(e, views, 4000, 0.5, NULL, NULL);
+    int guard = 0;
+    for (size_t i = S; i < F; ++i) if (store[i] != kGuard) ++guard;
+    CHECK(guard == 0);
+}
+
+// A store at another sample rate plays at its own speed (as groove~ does), and
+// loop times are seconds of store material.
+static void test_buffer_sample_rate()
+{
+    std::printf("test_buffer_sample_rate\n");
+    const double BR = 24000.0;                 // store rate; DSP runs at SR
+    const size_t F = 24000;                    // 1 s of store material
+    const size_t edge = 6000 + 200;            // 0.25 s loop end + fade margin
+    std::vector<float> store(F, 0.f);
+    for (size_t i = edge; i < F; ++i) store[i] = 1.f;   // must never be heard
+
+    const double dspRates[] = {SR, 96000.0};
+    for (double dsp : dspRates) {
+        Eng e; e.setSampleRate(dsp); e.setNumVoices(1);
+        softkut::BufferView views[NV] = {softkut::BufferView{store.data(), F, 1, BR}};
+        e.setLoopStart(0, 0.f);
+        e.setLoopEnd(0, 0.25f);
+        e.setFadeTime(0, 0.001f);
+        e.cutToPos(0, 0.f);
+        e.setPlayFlag(0, true);
+
+        // natural speed: 0.125 s of real time advances 0.125 s of store
+        const int half = (int)(dsp * 0.125);
+        std::vector<double> cap;
+        runViews(e, views, half - half % 64, 0.0, &cap, NULL);
+        CHECK_NEAR(e.getSavedPosition(0), 0.125, 0.005);
+
+        // one second: the loop wraps at 0.25 store seconds, never past it
+        runViews(e, views, (int)dsp, 0.0, &cap, NULL);
+        double peak = 0.0;
+        for (double s : cap) peak = std::max(peak, std::fabs(s));
+        CHECK(peak < 0.01);
+        softkut::VoiceInfo vi = e.getVoiceInfo(0);
+        CHECK(vi.position >= 0.f && vi.position <= 1.f);
+    }
+
+    // rate is clamped after scaling: 64 x (96k / 48k) must not overrun softcut
+    Eng f; f.setSampleRate(SR); f.setNumVoices(1);
+    std::vector<float> s96(96000, 0.25f);
+    softkut::BufferView v96[NV] = {softkut::BufferView{s96.data(), s96.size(), 1, 96000.0}};
+    f.setLoopStart(0, 0.f); f.setLoopEnd(0, 1.f);
+    f.setRate(0, 64.f);
+    f.cutToPos(0, 0.f);
+    f.setPlayFlag(0, true);
+    std::vector<double> out;
+    runViews(f, v96, 4800, 0.0, &out, NULL);
+    int bad = 0;
+    for (double s : out) if (!std::isfinite(s)) ++bad;
+    CHECK(bad == 0);
+}
+
+// sync lands the follower on the lead's position in store seconds, even when
+// their stores run at different rates.
+static void test_sync_across_store_rates()
+{
+    std::printf("test_sync_across_store_rates\n");
+    std::vector<float> a(24000, 0.f), b(48000, 0.f);
+    Eng e; e.setSampleRate(SR); e.setNumVoices(2);
+    softkut::BufferView views[NV] = {
+        softkut::BufferView{a.data(), a.size(), 1, 24000.0},
+        softkut::BufferView{b.data(), b.size(), 1, 0.0}};
+    for (int v = 0; v < 2; ++v) {
+        e.setLoopStart(v, 0.f); e.setLoopEnd(v, 0.9f); e.setFadeTime(v, 0.001f);
+        e.setPlayFlag(v, true);
+    }
+    e.cutToPos(0, 0.3f);
+    e.cutToPos(1, 0.f);
+    runViews(e, views, 64 * 10, 0.0, NULL, NULL);
+    e.syncVoice(1, 0, 0.f);
+    runViews(e, views, 64, 0.0, NULL, NULL);
+    CHECK_NEAR(e.getSavedPosition(1), e.getSavedPosition(0), 0.005);
+}
+
+// reset stops every voice and restores every default, so the next play starts
+// from the beginning of the default loop.
+static void test_reset_restarts()
+{
+    std::printf("test_reset_restarts\n");
+    Eng e; e.setSampleRate(SR); e.setNumVoices(2);
+    const size_t F = 1 << 17;
+    std::vector<float> buf(F);
+    for (size_t i = 0; i < F; ++i) buf[i] = 0.5f * std::sin((float)i * 0.01f);
+
+    // a playing, overdubbing, fed-back voice with non-default settings
+    e.setLoopStart(0, 0.5f); e.setLoopEnd(0, 1.5f); e.setRate(0, 2.f);
+    e.setLevel(0, 0.25f); e.setFeedback(1, 0, 1.f); e.setPreLevel(0, 1.f);
+    e.cutToPos(0, 1.f); e.setPlayFlag(0, true); e.setRecFlag(0, true);
+    e.setPlayFlag(1, true); e.cutToPos(1, 0.f);
+    run(e, buf.data(), F, 4800, 0.0, NULL);
+    CHECK(e.getSavedPosition(0) > 0.5);
+
+    e.reset();
+    std::vector<double> cap;
+    run(e, buf.data(), F, 4800, 0.0, &cap);
+    double peak = 0.0;
+    for (size_t i = 64; i < cap.size(); ++i) peak = std::max(peak, std::fabs(cap[i]));
+    CHECK(peak < 1e-6);                        // every voice stopped
+    CHECK_NEAR(e.getSavedPosition(0), 0.0, 1e-9);
+    softkut::VoiceInfo vi = e.getVoiceInfo(0);
+    CHECK(vi.state == 0);
+    CHECK_NEAR(vi.startSec, 0.0, 1e-6);
+    CHECK_NEAR(vi.endSec, 1.0, 1e-6);
+
+    // play alone restarts at the default loop start, at rate 1, unity level
+    e.setPlayFlag(0, true);
+    double lo, hi;
+    positionRange(e, buf, 1.5, 0.0, &lo, &hi);
+    CHECK(lo < 0.01);
+    CHECK_NEAR(hi, 1.0, 0.005);
+    cap.clear();
+    run(e, buf.data(), F, 4800, 0.0, &cap);
+    double outPeak = 0.0;
+    for (double s : cap) outPeak = std::max(outPeak, std::fabs(s));
+    CHECK(outPeak > 0.3);                      // level back to 1, not 0.25
+}
+
 // ---------------------------------------------------------------------------
 int main()
 {
-    test_usable_frames();
     test_spsc_queue();
     test_command_drain();
     test_record_playback();
@@ -747,6 +1265,20 @@ int main()
     test_wrote_block_plain_record();
     test_block_split();
     test_poll_during_record_once();
+    test_sanitize();
+    test_extreme_values_stay_finite();
+    test_samplerate_change_keeps_loop();
+    test_concurrent_producers();
+    test_play_without_position_loops();
+    test_null_input_is_silence();
+    test_samplerate_set_during_process();
+    test_any_length_buffer();
+    test_loop_past_buffer_end();
+    test_interleaved_channels();
+    test_buffer_shrinks_while_recording();
+    test_buffer_sample_rate();
+    test_sync_across_store_rates();
+    test_reset_restarts();
 
     std::printf("\n%d checks, %d failures\n", g_total, g_fail);
     return g_fail == 0 ? 0 : 1;

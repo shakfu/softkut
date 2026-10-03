@@ -257,10 +257,10 @@ void Voice::setRecOnceFlag(bool val) {
     }
 }
 
-void Voice::setBuffer(float *b, unsigned int nf) {
+void Voice::setBuffer(float *b, unsigned int nf, unsigned int stride) {
     buf = b;
     bufFrames = nf;
-    sch.setBuffer(buf, bufFrames);
+    sch.setBuffer(buf, bufFrames, stride);   // softkut patch: stride
 }
 
 void Voice::setRecOffset(float d) {

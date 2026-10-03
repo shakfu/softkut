@@ -5,7 +5,7 @@ plumbing below is therefore unverified by CI and has to be checked by hand in
 Max after changes to either external. Run the list before tagging a release.
 
 Setup: `make` then `make link`, restart Max, open `help/softkut~.maxhelp` and
-`help/mc.softcut~.maxhelp`.
+`help/mc.softkut~.maxhelp`.
 
 ## 1. MC channel negotiation (`mc.softkut~`)
 
@@ -20,8 +20,14 @@ Setup: `make` then `make link`, restart Max, open `help/softkut~.maxhelp` and
 
 With DSP on and a voice playing:
 
-- Resize the `buffer~` (`sizeinsamples`). Playback must continue without a
-  crash; the usable length is the largest power of two that fits.
+- Resize the `buffer~` (`sizeinsamples`), shorter and longer, while a voice
+  records. Playback must continue without a crash, over the whole new length.
+- Load a stereo file into a 2-channel `buffer~` and play it with
+  `softkut~ <name> 2`: voice 0 must play the left channel, voice 1 the right.
+  `voicebuf 0 <name> 2` must switch voice 0 to the right channel; channel 3
+  must silence the voice with one console warning.
+- Load a 44.1 kHz file with DSP at 48 kHz. Rate 1 must play at the original
+  pitch, and `loopend <v> 1` must loop exactly one second of the file.
 - Send `set <name>` and `voicebuf <v> <name>` to repoint voices at another
   `buffer~`. Both must take effect on the next perform block.
 - Delete the `buffer~` object. The voices must fall silent, not crash.
@@ -44,6 +50,10 @@ With DSP on and a voice playing:
   reports are running. Repeat about 20 times. Any crash means the report clock
   outlived the engine.
 - Repeat with DSP toggled off immediately before the delete.
+- With DSP on and `@report 0`, send `report 20`. `phase` reports must start
+  at once, without restarting DSP. Send `report 0`; they must stop.
+- Put the object in a subpatcher and disable its audio with `pcontrol`
+  (`enable 0`) while global audio stays on. Reports must stop.
 
 ## 5. Oversized signal vectors (optional)
 

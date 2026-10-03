@@ -51,9 +51,8 @@ namespace softcut {
         void setState(State state);
         void setPhase(phase_t phase);
 
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        // **NB** buffer size must be a power of two!!!!
-        void setBuffer(sample_t *buf, unsigned int frames);
+        // softkut patch: any length; stride selects one interleaved channel
+        void setBuffer(sample_t *buf, unsigned int frames, unsigned int stride = 1);
         void setRate(rate_t rate);
         FadeCurves *fadeCurves;
 
@@ -69,7 +68,7 @@ namespace softcut {
         sample_t* buf_ = nullptr; // output buffer
         unsigned int wrIdx_ = 0; // write index
         unsigned int bufFrames_ = 0;
-        unsigned int bufMask_ = 0;
+        unsigned int stride_ = 1;
 
         State state_ = Stopped;
         rate_t rate_ = 1.0;

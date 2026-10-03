@@ -4,18 +4,25 @@ PROJECTS := $(SRCDIR)/projects
 PKG_NAME = softkut
 MAX_VERSIONS := 8 9
 
-.PHONY: all build test clean setup update-submodules link
+# print a section header from a recipe: $(call section,"text")
+section = @echo "==> "$(1)
+
+.PHONY: all build test clean setup update-submodules link maxhelp
 
 all: build
 
 
-build: clean
+build:
 	@mkdir -p build && cd build && \
 		cmake .. && \
 		cmake --build . --config Release
 
 test: build
 	@cd build && ctest --output-on-failure
+
+# regenerate help/softkut~.maxhelp (py2max, via uv)
+maxhelp:
+	@uv run python scripts/make_help.py
 
 clean:
 	@rm -rf externals build

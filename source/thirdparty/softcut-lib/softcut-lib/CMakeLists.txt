@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.7)
+cmake_minimum_required(VERSION 3.19)  # softkut patch: match top level; < 3.10 is deprecated
 project(softcut)
 
 set(CMAKE_CXX_STANDARD 14)

@@ -181,8 +181,9 @@ namespace softcut {
             scv[follow].cutToPos(scv[lead].getActivePosition() + offset);
         }
 
-        void setVoiceBuffer(int id, float *buf, size_t bufFrames) {
-            scv[id].setBuffer(buf, bufFrames);
+        // softkut patch: stride selects one channel of an interleaved buffer
+        void setVoiceBuffer(int id, float *buf, size_t bufFrames, unsigned int stride = 1) {
+            scv[id].setBuffer(buf, bufFrames, stride);
         }
 
 	// can be called from non-audio threads

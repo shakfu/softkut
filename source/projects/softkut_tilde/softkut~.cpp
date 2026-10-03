@@ -2,8 +2,7 @@
 //
 // Thin Max shell over softkut::Engine (../../include/softkut_engine.h), which
 // owns the softcut voices, the lock-free command queue, the double<->float
-// conversion, the power-of-two buffer framing, and the per-voice output
-// level. This file owns only Max plumbing: inlets/outlets, the per-voice
+// conversion, and the per-voice output level. This file owns only Max plumbing: inlets/outlets, the per-voice
 // buffer~ references, message parsing, the phase-report clock, and the perform
 // call.
 //
@@ -12,12 +11,10 @@
 // one signal outlet (playback) per voice, plus a trailing message outlet for
 // phase/position reports. (No stereo mix outlet -- pan downstream if needed.)
 //
-// Buffer model (zero-copy): each voice points at the locked
-// samples of its own mono buffer~ (defaulting to the shared name; override per
-// voice with "voicebuf <v> <name>" -- e.g. route voice 0 -> left buffer~,
-// voice 1 -> right buffer~ for stereo). softcut needs contiguous mono and wraps
-// indices with a power-of-two bitmask, so the engine uses the largest power-of-
-// two prefix of each buffer~'s frame count. Multichannel buffer~s are refused.
+// Buffer model (zero-copy): each voice reads and writes one channel of the
+// locked samples of a buffer~ of any length, channel count and sample rate
+// (shared name by default; "voicebuf <v> <name> [<chan>]" overrides one voice).
+// See softkut_control.h for channel selection.
 
 #include "ext.h"          // standard Max include, always required
 #include "ext_obex.h"     // required for new style Max object
@@ -43,7 +40,8 @@ typedef struct _softkut {
 
     t_buffer_ref  *vbuf[NumVoices];     // per-voice buffer~ reference
     t_symbol      *vbufname[NumVoices]; // per-voice buffer~ name
-    t_bool         monoWarned;          // throttle the multichannel warning
+    long           vchan[NumVoices];   // channel per voice, -1 = voice mod channels
+    t_bool         chanWarned;        // throttle the missing-channel warning
 
     void          *reportout;   // message outlet for phase / position reports
     void          *tclock;      // phase-report clock
@@ -55,17 +53,6 @@ static t_symbol *ps_phase, *ps_info;
 
 // The control surface (command table + dispatch) lives in softkut_control.h,
 // shared with mc.softkut~. The thunks below forward to it.
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-// create or repoint the buffer~ reference for one voice
-static void ensure_vbuf(t_softkut *x, int v)
-{
-    if (!x->vbufname[v]) return;
-    if (!x->vbuf[v]) x->vbuf[v] = buffer_ref_new((t_object *)x, x->vbufname[v]);
-    else             buffer_ref_set(x->vbuf[v], x->vbufname[v]);
-}
 
 // ---------------------------------------------------------------------------
 // control messages -> shared dispatch (softkut_control.h)
@@ -119,34 +106,11 @@ void softkut_poll(t_softkut *x)
 // ---------------------------------------------------------------------------
 // "set <name>": point every voice at the named (shared) buffer~.
 void softkut_set(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 1 || atom_gettype(argv) != A_SYM) {
-        object_error((t_object *)x, "set: requires a buffer~ name");
-        return;
-    }
-    t_symbol *name = atom_getsym(argv);
-    for (int v = 0; v < x->nvoices; ++v) { x->vbufname[v] = name; ensure_vbuf(x, v); }
-    x->monoWarned = false;
-    if (!buffer_ref_getobject(x->vbuf[0]))
-        object_warn((t_object *)x, "set: no buffer~ named %s", name->s_name);
-}
+{ softkut::setBuffer(x, argc, argv); }
 
 // "voicebuf <v> <name>": override one voice's buffer~ (e.g. for stereo).
 void softkut_voicebuf(t_softkut *x, t_symbol *s, long argc, t_atom *argv)
-{
-    if (argc < 2 || atom_gettype(argv + 1) != A_SYM) {
-        object_error((t_object *)x, "voicebuf: expected <voice> <buffer~ name>");
-        return;
-    }
-    long v = atom_getlong(argv);
-    if (v < 0 || v >= x->nvoices) {
-        object_error((t_object *)x, "voicebuf: voice %ld out of range [0..%ld]", v, x->nvoices - 1);
-        return;
-    }
-    x->vbufname[v] = atom_getsym(argv + 1);
-    ensure_vbuf(x, (int)v);
-    x->monoWarned = false;
-}
+{ softkut::setVoiceBuffer(x, argc, argv); }
 
 // ---------------------------------------------------------------------------
 // perform
@@ -159,48 +123,11 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
     for (int v = 0; v < nv; ++v) voiceOuts[v] = outs[v];
     double *mixL = NULL, *mixR = NULL;   // no stereo-mix outlets (pan downstream)
 
-    // Resolve each voice's buffer~ and lock the distinct ones exactly once
-    // (several voices may share a buffer~).
-    t_buffer_obj *lockedObj[NumVoices];
-    float        *lockedSamps[NumVoices];
-    int           nlocked = 0;
-    float        *samps[NumVoices];
-    size_t        frames[NumVoices];
-
-    for (int v = 0; v < nv; ++v) {
-        samps[v] = NULL; frames[v] = 0;
-        t_buffer_obj *b = x->vbuf[v] ? buffer_ref_getobject(x->vbuf[v]) : NULL;
-        if (!b) continue;
-        if ((long)buffer_getchannelcount(b) != 1) {
-            if (!x->monoWarned) {
-                object_warn((t_object *)x, "voice %d: multichannel buffer~ not supported (mono only)", v);
-                x->monoWarned = true;
-            }
-            continue;
-        }
-        int li = -1;
-        for (int k = 0; k < nlocked; ++k) if (lockedObj[k] == b) { li = k; break; }
-        if (li < 0) {
-            float *sp = buffer_locksamples(b);
-            if (!sp) continue;
-            lockedObj[nlocked]   = b;
-            lockedSamps[nlocked] = sp;
-            li = nlocked++;
-        }
-        samps[v]  = lockedSamps[li];
-        frames[v] = (size_t)buffer_getframecount(b);
-    }
-
-    x->engine->process(ins, voiceOuts, (int)vec, samps, frames, mixL, mixR);
-
-    // mark written-into buffers dirty, then release all locks. getWroteBlock()
-    // covers a record-once pass, which clears the record flag inside the same
-    // process() call that performs its last writes.
-    for (int v = 0; v < nv; ++v)
-        if (samps[v] && x->engine->getWroteBlock(v))
-            buffer_setdirty(buffer_ref_getobject(x->vbuf[v]));
-    for (int k = 0; k < nlocked; ++k)
-        buffer_unlocksamples(lockedObj[k]);
+    softkut::BufferView            views[NumVoices];
+    softkut::BufferLocks<NumVoices> locks;
+    softkut::lockBuffers(x, nv, views, locks);
+    x->engine->process(ins, voiceOuts, (int)vec, views, mixL, mixR);
+    softkut::releaseBuffers(x, nv, views, locks);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +144,7 @@ void softkut_clock(t_softkut *x)
             outlet_anything(x->reportout, ps_phase, 2, a);
         }
     }
-    if (sys_getdspstate())
+    if (sys_getdspobjdspstate((t_object *)x))   // this patcher's audio, not global
         clock_delay(x->tclock, x->report);
 }
 
@@ -229,18 +156,8 @@ void softkut_dsp64(t_softkut *x, t_object *dsp64, short *count, double srate,
 {
     x->engine->setSampleRate(srate);
 
-    for (int v = 0; v < x->nvoices; ++v) ensure_vbuf(x, v);
+    for (int v = 0; v < x->nvoices; ++v) softkut::ensureVbuf(x, v);
 
-    // inform the user once if voice 0's buffer~ length is being reduced
-    t_buffer_obj *b0 = x->vbuf[0] ? buffer_ref_getobject(x->vbuf[0]) : NULL;
-    if (b0) {
-        long frames = (long)buffer_getframecount(b0);
-        long usable = (long)t_engine::usableFrames(frames);
-        if (usable && usable != frames)
-            object_post((t_object *)x,
-                        "buffer~ \"%s\": using %ld of %ld frames (softcut requires power-of-two length)",
-                        x->vbufname[0]->s_name, usable, frames);
-    }
 
     object_method(dsp64, gensym("dsp_add64"), x, (method)softkut_perform64, 0, NULL);
 
@@ -298,11 +215,11 @@ void *softkut_new(t_symbol *s, long argc, t_atom *argv)
 
     x->engine     = new t_engine();
     x->engine->setNumVoices((int)nvoices);
-    x->monoWarned = false;
+    x->chanWarned = false;
     x->report     = 0;
     x->tclock     = clock_new((t_object *)x, (method)softkut_clock);
 
-    for (int v = 0; v < NumVoices; ++v) { x->vbuf[v] = NULL; x->vbufname[v] = name; }
+    for (int v = 0; v < NumVoices; ++v) { x->vbuf[v] = NULL; x->vbufname[v] = name; x->vchan[v] = -1; }
 
     attr_args_process(x, (short)argc, argv);
 
@@ -351,6 +268,7 @@ extern "C" void ext_main(void *r)
 
     CLASS_ATTR_LONG(c, "report", 0, t_softkut, report);
     CLASS_ATTR_FILTER_MIN(c, "report", 0);
+    CLASS_ATTR_ACCESSORS(c, "report", NULL, (method)softkut::reportSet<t_softkut>);
     CLASS_ATTR_LABEL(c, "report", 0, "Phase report interval (ms, 0 = off)");
 
     class_dspinit(c);

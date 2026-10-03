@@ -20,7 +20,7 @@ namespace softcut {
 
         void init(FadeCurves *fc);
 
-        void setBuffer(float *buf, unsigned int numFrames);
+        void setBuffer(float *buf, unsigned int numFrames, unsigned int stride = 1);  // softkut patch: stride
 
         void setSampleRate(float hz);
 
