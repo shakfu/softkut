@@ -2,10 +2,10 @@
 //
 // Same softcut engine and control surface as softkut~, but presented through
 // Max's MC (multichannel) system: a single multichannel record-input inlet, a
-// multichannel voice-output outlet, a 2-channel stereo-mix outlet, and a message
-// outlet for reports. The voice count is set by the second creation argument
-// (default 6, capped at MC_MAX_VOICES) and becomes the channel count of the
-// voice-output outlet.
+// multichannel voice-output outlet, a multichannel sync outlet (each voice's
+// play head in ms of buffer material), and a message outlet for reports. The
+// voice count is set by the second creation argument (default 6, capped at
+// MC_MAX_VOICES) and is the channel count of both signal outlets.
 //
 // All DSP, the command queue, and the routing matrices live in the shared
 // softkut::Engine; the control messages are dispatched through softkut_control.h
@@ -38,7 +38,6 @@ typedef struct _mcsoftkut {
 } t_mcsoftkut;
 
 static t_class  *mcsoftkut_class = NULL;
-static t_symbol *ps_phase, *ps_info;
 
 // ---------------------------------------------------------------------------
 
@@ -69,24 +68,9 @@ void mcsoftkut_reset(t_mcsoftkut *x)
         object_warn((t_object *)x, "reset: command queue full, dropped");
 }
 
-// one `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>`
-// list per voice; positions converted from seconds to ms here.
+// `poll`: one info list per voice (see softkut::reportInfo)
 void mcsoftkut_poll(t_mcsoftkut *x)
-{
-    for (int v = 0; v < x->nvoices; ++v) {
-        softkut::VoiceInfo vi = x->engine->getVoiceInfo(v);
-        t_atom a[8];
-        atom_setlong (a + 0, v);
-        atom_setfloat(a + 1, vi.position);
-        atom_setlong (a + 2, vi.play);
-        atom_setlong (a + 3, vi.rec);
-        atom_setfloat(a + 4, vi.startSec * 1000.0);
-        atom_setfloat(a + 5, vi.endSec * 1000.0);
-        atom_setfloat(a + 6, vi.windowSec * 1000.0);
-        atom_setlong (a + 7, vi.state);
-        outlet_anything(x->reportout, ps_info, 8, a);
-    }
-}
+{ softkut::reportInfo(x); }
 
 // ---------------------------------------------------------------------------
 // buffer~ association (same semantics as softkut~)
@@ -100,10 +84,10 @@ void mcsoftkut_voicebuf(t_mcsoftkut *x, t_symbol *s, long argc, t_atom *argv)
 // ---------------------------------------------------------------------------
 // MC negotiation
 // ---------------------------------------------------------------------------
-// channels produced on the (single) multichannel voice-output outlet.
+// channels on the voice-output (0) and sync (1) outlets: one per voice.
 long mcsoftkut_multichanneloutputs(t_mcsoftkut *x, long index)
 {
-    return (index == 0) ? x->nvoices : 0;
+    return (index == 0 || index == 1) ? x->nvoices : 0;
 }
 
 // input channel count changed; our output count is fixed by nvoices, so the
@@ -123,11 +107,13 @@ void mcsoftkut_perform64(t_mcsoftkut *x, t_object *dsp64, double **ins, long num
 
     // map MC input channels to voice record inputs (null = silence past the
     // connected channel count), and voice outlet channels to the voice outputs.
+    // outs[] holds outlet 0's channels, then outlet 1's: voices, then syncs.
     double *voiceIns[MC_MAX_VOICES];
-    double *voiceOuts[MC_MAX_VOICES];
+    double *voiceOuts[MC_MAX_VOICES], *syncOuts[MC_MAX_VOICES];
     for (int v = 0; v < nv; ++v) {
         voiceIns[v]  = (v < numins) ? ins[v] : NULL;
         voiceOuts[v] = outs[v];
+        syncOuts[v]  = outs[nv + v];
     }
     // no stereo-mix outlet on mc.softkut~ (pan downstream with mc.* objects)
     double *mixL = NULL, *mixR = NULL;
@@ -135,8 +121,9 @@ void mcsoftkut_perform64(t_mcsoftkut *x, t_object *dsp64, double **ins, long num
     softkut::BufferView            views[MC_MAX_VOICES];
     softkut::BufferLocks<MC_MAX_VOICES> locks;
     softkut::lockBuffers(x, nv, views, locks);
-    x->engine->process(voiceIns, voiceOuts, (int)vec, views, mixL, mixR);
+    x->engine->process(voiceIns, voiceOuts, (int)vec, views, mixL, mixR, syncOuts);
     softkut::releaseBuffers(x, nv, views, locks);
+    softkut::syncToMs(syncOuts, nv, vec);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,14 +132,7 @@ void mcsoftkut_perform64(t_mcsoftkut *x, t_object *dsp64, double **ins, long num
 void mcsoftkut_clock(t_mcsoftkut *x)
 {
     if (x->report <= 0) return;
-    for (int v = 0; v < x->nvoices; ++v) {
-        if (x->engine->checkQuantPhaseChanged(v)) {
-            t_atom a[2];
-            atom_setlong (a + 0, v);
-            atom_setfloat(a + 1, x->engine->getQuantPhase(v));
-            outlet_anything(x->reportout, ps_phase, 2, a);
-        }
-    }
+    softkut::reportPhase(x);
     if (sys_getdspobjdspstate((t_object *)x))   // this patcher's audio, not global
         clock_delay(x->tclock, x->report);
 }
@@ -195,6 +175,9 @@ void mcsoftkut_assist(t_mcsoftkut *x, void *b, long m, long a, char *s)
         snprintf_zero(s, 256, "(multichannel signal) per-voice record inputs / messages");
     } else if (a == 0) {
         snprintf_zero(s, 256, "(multichannel signal) %ld voice outputs", x->nvoices);
+    } else if (a == 1) {
+        snprintf_zero(s, 256, "(multichannel signal) %ld play heads (ms in the buffer~)",
+                      x->nvoices);
     } else {
         snprintf_zero(s, 256, "(list) phase / info reports");
     }
@@ -213,9 +196,11 @@ void *mcsoftkut_new(t_symbol *s, long argc, t_atom *argv)
 
     dsp_setup((t_pxobject *)x, 1);                  // one MC record-input inlet
 
-    // one multichannel voice-output outlet, then the message outlet. Stereo is
-    // left to downstream mc.* objects (the per-voice level still applies here).
-    x->reportout = outlet_new(x, NULL);             // outlet 1: reports
+    // the message outlet first (-> rightmost), then the two multichannel
+    // outlets: 0 = voice outputs, 1 = sync. Stereo is left to downstream mc.*
+    // objects (the per-voice level still applies here).
+    x->reportout = outlet_new(x, NULL);             // outlet 2: reports
+    outlet_new(x, "multichannelsignal");            // outlet 1: sync
     outlet_new(x, "multichannelsignal");            // outlet 0: voice outputs
 
     x->engine = new t_engine();
@@ -282,6 +267,4 @@ extern "C" void ext_main(void *r)
     class_register(CLASS_BOX, c);
     mcsoftkut_class = c;
 
-    ps_phase    = gensym("phase");
-    ps_info     = gensym("info");
 }

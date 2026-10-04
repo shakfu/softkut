@@ -27,8 +27,10 @@ namespace softcut {
         }
 
         // assumption: channel count is equal to voice count!
-        void processBlock(int v, const float *in, float *out, int numFrames) {
-            scv[v].processBlockMono(in, out, numFrames);
+        // softkut patch: optional per-sample head phase (buffer frames)
+        void processBlock(int v, const float *in, float *out, int numFrames,
+                          phase_t *phaseOut = nullptr) {
+            scv[v].processBlockMono(in, out, numFrames, phaseOut);
         }
 
         void setSampleRate(unsigned int hz) {

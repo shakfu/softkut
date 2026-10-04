@@ -61,3 +61,18 @@ The engine splits host vectors longer than 8192 samples into 8192-sample
 chunks. Max's own vector size stops at 4096, so this needs a `poly~` with
 upsampling (4096 x `up 4` = 16384). Confirm the output is continuous and
 contains no silent tail.
+
+## 6. Sync outlets and message units
+
+- `softkut~ <buf> 2`: the outlets, left to right, must be voice 1 audio, voice 2
+  audio, voice 1 sync, voice 2 sync, reports (check the assist strings).
+- Play voice 1 and watch its sync outlet through `snapshot~ 30` into a number
+  box: it must rise in ms and wrap at the loop end. With `loopend` past the
+  buffer's end it must wrap at the buffer's length instead.
+- `mc.softkut~ <buf> 4`: outlet 2 must carry 4 sync channels and outlet 1 the
+  4 audio channels (`mc.snapshot~` or `mc.unpack~` into `snapshot~`). perform
+  assumes the output array lists outlet 1's channels before outlet 2's; swapped
+  outlets mean that assumption is wrong.
+- `loopend 1 500` must loop 500 ms; `play 0 1` (voice 0) must post a range
+  error naming `[1..N]`; `rate 1 100` must warn and clamp to 64.
+

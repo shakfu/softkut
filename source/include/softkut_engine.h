@@ -125,12 +125,13 @@ struct BufferView {
 
 // ---------------------------------------------------------------------------
 // Per-voice metadata snapshot (karma~-style). Filled by Engine::getVoiceInfo
-// and reported on demand by the shells' `poll` handler. Positions are in
-// seconds (the shell converts to ms); `position` is normalized to [0,1] within
-// the voice's loop window; `state` is a synthesized play/rec code.
+// and reported on demand by the shells' `poll` handler. Times are seconds of
+// buffer material (the shell converts to ms); `position` is normalized to [0,1]
+// within the voice's loop window; `state` is a synthesized play/rec code.
 // ---------------------------------------------------------------------------
 struct VoiceInfo {
     float position;    // 0..1 within the loop window (start..end)
+    float bufferSec;   // play head in the buffer, wrapped to its length
     int   play;        // play flag (0/1)
     int   rec;         // record flag (0/1)
     float startSec;    // loop start (seconds)
@@ -198,6 +199,8 @@ public:
             pubSnap_[v].store(0, std::memory_order_relaxed);
             wrote_[v].store(false, std::memory_order_relaxed);
             bufRate_[v] = 0.0;
+            lastSync_[v] = 0.0;
+            bufLen_[v].store(0.0, std::memory_order_relaxed);
             scale_[v].store(1.0f, std::memory_order_relaxed);
         }
         setDefaults();
@@ -294,11 +297,15 @@ public:
     // bufs: one BufferView per voice. A null `bufs`, or a view with null
     //   samples or zero frames, makes that voice silent.
     // mixL/mixR: the equal-power panned sum of all voices (may be null to skip).
+    // syncOuts: optional, one array per voice (entries may be null): the play
+    //   head for every sample, in seconds of buffer material, wrapped to the
+    //   buffer's length. A voice with no buffer, or disabled, holds its last value.
     // A host vector longer than kMaxBlock is split into kMaxBlock chunks rather
     // than clamped: the scratch buffers and the feedback store hold one chunk,
     // so a clamped pass left every output sample past kMaxBlock unwritten.
     void process(const double *const *ins, double *const *voiceOuts, int nframes,
-                 const BufferView *bufs, double *mixL, double *mixR) {
+                 const BufferView *bufs, double *mixL, double *mixR,
+                 double *const *syncOuts = nullptr) {
         if (srPending_.exchange(false, std::memory_order_acquire))
             applySampleRate(requestedSr_.load(std::memory_order_relaxed));
         drain();
@@ -308,13 +315,15 @@ public:
 
         const double *inSlice[NumVoices];
         double       *outSlice[NumVoices];
+        double       *syncSlice[NumVoices];
         for (int off = 0; off < nframes; off += kMaxBlock) {
             const int n = (nframes - off < kMaxBlock) ? (nframes - off) : kMaxBlock;
             for (int v = 0; v < numVoices_; ++v) {
                 inSlice[v]  = ins[v] ? ins[v] + off : nullptr;
                 outSlice[v] = voiceOuts[v] + off;
+                syncSlice[v] = (syncOuts && syncOuts[v]) ? syncOuts[v] + off : nullptr;
             }
-            processChunk(inSlice, outSlice, n, bufs,
+            processChunk(inSlice, outSlice, syncSlice, n, bufs,
                          mixL ? mixL + off : nullptr, mixR ? mixR + off : nullptr);
         }
         updatePhases();
@@ -324,8 +333,13 @@ public:
     // play/rec come from the snapshot the audio thread publishes at the end of
     // each chunk, never from softcut's plain-bool flags.
     // positions in seconds of buffer material (see BufferView::sampleRate)
+    // getSavedPosition is the head position softcut steps, which can pass the
+    // buffer's end when a loop point does (reads wrap there). getQuantPhase is
+    // the reported phase, wrapped to the buffer so it marks the frame heard.
     double getSavedPosition(int v) { return cut_.getSavedPosition(v) / scale(v); }
-    double getQuantPhase(int v)    { return cut_.getQuantPhase(v) / scale(v); }
+    double getQuantPhase(int v)    { return wrapToBuffer(v, cut_.getQuantPhase(v) / scale(v)); }
+    // buffer length (seconds) as of the voice's last processed block; 0 = none
+    double getBufferSeconds(int v) const { return bufLen_[v].load(std::memory_order_relaxed); }
     bool   getPlayFlag(int v)      { return (snapState(snap(v)) & 1) != 0; }
     bool   getRecFlag(int v)       { return (snapState(snap(v)) & 2) != 0; }
     bool   getEnabled(int v)       { return enabled_[v]; }
@@ -342,10 +356,14 @@ public:
     VoiceInfo getVoiceInfo(int v) {
         const uint64_t sn    = snap(v);
         const int      st    = snapState(sn);
+        const float    pos   = snapPos(sn);
         const float    start = loopStart_[v].load(std::memory_order_relaxed);
         const float    end   = loopEnd_[v].load(std::memory_order_relaxed);
+        const float    win   = end - start;
+        const float    norm  = win > 1e-9f ? (pos - start) / win : 0.f;
         VoiceInfo info;
-        info.position  = snapPos(sn);
+        info.position  = norm < 0.f ? 0.f : (norm > 1.f ? 1.f : norm);
+        info.bufferSec = static_cast<float>(wrapToBuffer(v, pos));
         info.play      = (st & 1) ? 1 : 0;
         info.rec       = (st & 2) ? 1 : 0;
         info.startSec  = start;
@@ -365,7 +383,7 @@ public:
 
 private:
     // One word carries the whole poll snapshot: the transport code (rec<<1 |
-    // play) in the high half, the loop-normalized position (float bits) in the
+    // play) in the high half, the head position in seconds (float bits) in the
     // low half. Written only by the audio thread, read by anyone.
     static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
                   "the poll snapshot must be lock-free: the audio thread writes it");
@@ -385,18 +403,23 @@ private:
     uint64_t snap(int v) const { return pubSnap_[v].load(std::memory_order_acquire); }
 
     void publishSnap(int v) {
-        const float start = loopStart_[v].load(std::memory_order_relaxed);
-        const float end   = loopEnd_[v].load(std::memory_order_relaxed);
-        const float win   = end - start;
-        const float pos   = static_cast<float>(getSavedPosition(v));
-        float norm = win > 1e-9f ? (pos - start) / win : 0.f;
-        norm = norm < 0.f ? 0.f : (norm > 1.f ? 1.f : norm);
-        const int st = (cut_.getRecFlag(v) ? 2 : 0) | (cut_.getPlayFlag(v) ? 1 : 0);
-        pubSnap_[v].store(packSnap(st, norm), std::memory_order_release);
+        const float pos = static_cast<float>(getSavedPosition(v));
+        const int   st  = (cut_.getRecFlag(v) ? 2 : 0) | (cut_.getPlayFlag(v) ? 1 : 0);
+        pubSnap_[v].store(packSnap(st, pos), std::memory_order_release);
+    }
+
+    // a position in seconds, wrapped into the voice's buffer as softcut wraps
+    // its read index
+    double wrapToBuffer(int v, double sec) const {
+        const double len = bufLen_[v].load(std::memory_order_relaxed);
+        if (!(len > 0.0)) return sec;
+        const double m = std::fmod(sec, len);
+        return m < 0.0 ? m + len : m;
     }
 
     // one <= kMaxBlock chunk; the queue is already drained by the caller.
-    void processChunk(const double *const *ins, double *const *voiceOuts, int nframes,
+    void processChunk(const double *const *ins, double *const *voiceOuts,
+                      double *const *syncOuts, int nframes,
                       const BufferView *bufs, double *mixL, double *mixR) {
         // the equal-power pan mix is only computed when a host actually wants it
         const bool wantMix = (mixL != nullptr || mixR != nullptr);
@@ -435,10 +458,16 @@ private:
             const bool   writing = active && cut_.getRecFlag(dst);
             if (active) {
                 if (bv->sampleRate != bufRate_[dst]) setBufferRate(dst, bv->sampleRate);
+                const double rate = bv->sampleRate > 0.0 ? bv->sampleRate : sampleRate_;
+                bufLen_[dst].store(static_cast<double>(frames) / rate, std::memory_order_relaxed);
                 cut_.setVoiceBuffer(dst, buf, frames, bv->stride);
-                cut_.processBlock(dst, recIn_, outScratch_, nframes);
+                cut_.processBlock(dst, recIn_, outScratch_, nframes,
+                                  syncOuts[dst] ? phaseScratch_ : nullptr);
+                if (syncOuts[dst]) writeSync(dst, syncOuts[dst], nframes, frames, rate);
             } else {
                 for (int i = 0; i < nframes; ++i) outScratch_[i] = 0.f;
+                if (syncOuts[dst])
+                    for (int i = 0; i < nframes; ++i) syncOuts[dst][i] = lastSync_[dst];
             }
             if (writing) wrote_[dst].store(true, std::memory_order_relaxed);
             publishSnap(dst);
@@ -463,6 +492,21 @@ private:
 
         if (mixL) for (int i = 0; i < nframes; ++i) mixL[i] = static_cast<double>(mixLf_[i]);
         if (mixR) for (int i = 0; i < nframes; ++i) mixR[i] = static_cast<double>(mixRf_[i]);
+    }
+
+    // head phase (buffer frames, per sample) -> seconds of buffer material,
+    // wrapped as softcut wraps its read index
+    void writeSync(int v, double *sync, int nframes, size_t frames, double rate) {
+        const double len = static_cast<double>(frames);
+        for (int i = 0; i < nframes; ++i) {
+            double f = phaseScratch_[i];
+            if (f < 0.0 || f >= len) {
+                f = std::fmod(f, len);
+                if (f < 0.0) f += len;
+            }
+            sync[i] = f / rate;
+        }
+        lastSync_[v] = sync[nframes - 1];
     }
 
     bool cmd(CmdId id, int v, float val) {
@@ -672,12 +716,15 @@ private:
     float                           phaseQuant_[NumVoices]; // user quantum (seconds)
     double                          bufRate_[NumVoices];    // store rate, 0 = DSP rate
     std::atomic<float>              scale_[NumVoices];      // bufRate / DSP rate
+    std::atomic<double>             bufLen_[NumVoices];     // buffer length, seconds
     softcut::LogRamp                outLevel_[NumVoices];
     softcut::LogRamp                outPan_[NumVoices];
     softcut::LogRamp                fbLevel_[NumVoices][NumVoices];  // [src][dst]
     softcut::LogRamp                inLevel_[NumVoices][NumVoices];  // [inlet][voice]
     bool                            enabled_[NumVoices];
     float                           outScratch_[kMaxBlock];
+    softcut::phase_t                phaseScratch_[kMaxBlock];  // per-sample head phase
+    double                          lastSync_[NumVoices];      // held while inactive
     float                           recIn_[kMaxBlock];
     float                           mixLf_[kMaxBlock];
     float                           mixRf_[kMaxBlock];

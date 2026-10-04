@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "softkut_engine.h"
+#include "softkut_units.h"
 
 using softkut::Engine;
 using softkut::SpscQueue;
@@ -1244,6 +1245,142 @@ static void test_reset_restarts()
     CHECK(outPeak > 0.3);                      // level back to 1, not 0.25
 }
 
+// Reported positions mark the frame heard: with a loop point past the buffer's
+// end, softcut wraps its read index but its head position runs on, so the
+// reported phase and info's buffer position are wrapped to the buffer length.
+static void test_phase_wraps_to_buffer()
+{
+    std::printf("test_phase_wraps_to_buffer\n");
+    Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+    const size_t F = 24000;                    // 0.5 s
+    std::vector<float> store(F, 0.f);
+    softkut::BufferView views[NV] = {mono(store.data(), F)};
+    e.setLoopStart(0, 0.f); e.setLoopEnd(0, 2.f);
+    e.cutToPos(0, 0.f); e.setPlayFlag(0, true);
+    double maxPhase = 0.0, maxHead = 0.0, maxInfo = 0.0;
+    for (int b = 0; b < (int)(SR * 1.5) / 64; ++b) {
+        runViews(e, views, 64, 0.0, NULL, NULL);
+        maxPhase = std::max(maxPhase, e.getQuantPhase(0));
+        maxHead  = std::max(maxHead, e.getSavedPosition(0));
+        maxInfo  = std::max(maxInfo, (double)e.getVoiceInfo(0).bufferSec);
+    }
+    CHECK(maxHead > 1.0);                      // the head runs past the buffer
+    CHECK(maxPhase < 0.5);                     // the report does not
+    CHECK(maxInfo < 0.5);
+    CHECK_NEAR(e.getBufferSeconds(0), 0.5, 1e-9);
+    // inside the buffer, the wrapped and raw positions agree
+    e.cutToPos(0, 0.2f);
+    runViews(e, views, 64, 0.0, NULL, NULL);
+    CHECK_NEAR(e.getVoiceInfo(0).bufferSec, e.getSavedPosition(0), 1e-4);
+}
+
+// Run one voice for `total` samples and capture its sync signal.
+static std::vector<double> runSync(Eng &e, const softkut::BufferView *views, int total)
+{
+    const int B = 64;
+    std::vector<double> in(B, 0.0), out(B), sync(B), cap;
+    const double *ins[NV]  = {in.data()};
+    double       *outs[NV] = {out.data()};
+    double       *syncs[NV] = {sync.data()};
+    for (int done = 0; done < total; done += B) {
+        e.process(ins, outs, B, views, NULL, NULL, syncs);
+        cap.insert(cap.end(), sync.begin(), sync.end());
+    }
+    return cap;
+}
+
+// The sync signal is the play head for every sample, in seconds of buffer
+// material, wrapped where softcut wraps its read index.
+static void test_sync_signal()
+{
+    std::printf("test_sync_signal\n");
+    const size_t F = 48000;                    // 1 s
+    std::vector<float> store(F, 0.f);
+    {   // steps 1/SR per sample at rate 1, and wraps at the loop end
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        softkut::BufferView views[NV] = {mono(store.data(), F)};
+        e.setLoopStart(0, 0.f); e.setLoopEnd(0, 0.25f); e.setFadeTime(0, 0.001f);
+        e.cutToPos(0, 0.f); e.setPlayFlag(0, true);
+        std::vector<double> s = runSync(e, views, (int)SR);
+        int bad = 0, wraps = 0;
+        for (size_t i = 1000; i + 1 < s.size(); ++i) {
+            const double d = s[i + 1] - s[i];
+            if (d < 0.0) ++wraps;
+            else if (std::fabs(d - 1.0 / SR) > 1e-9) ++bad;
+        }
+        CHECK(bad == 0);
+        CHECK(wraps == 3);                     // 1 s of a 0.25 s loop, after the first
+        double hi = 0.0;
+        for (double v : s) hi = std::max(hi, v);
+        CHECK(hi <= 0.25 + 0.002);
+    }
+    {   // a loop past the buffer's end: the signal wraps at the buffer length
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        softkut::BufferView views[NV] = {mono(store.data(), 12000)};   // 0.25 s
+        e.setLoopStart(0, 0.f); e.setLoopEnd(0, 2.f);
+        e.cutToPos(0, 0.f); e.setPlayFlag(0, true);
+        std::vector<double> s = runSync(e, views, (int)SR);
+        double hi = 0.0;
+        for (double v : s) hi = std::max(hi, v);
+        CHECK(hi < 0.25);
+        CHECK(e.getSavedPosition(0) > 0.9);    // the head itself ran on
+    }
+    {   // a 24 kHz buffer plays at its own speed: 1 s of signal = 1 s of buffer
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        softkut::BufferView views[NV] = {softkut::BufferView{store.data(), F, 1, 24000.0}};
+        e.setLoopStart(0, 0.f); e.setLoopEnd(0, 1.9f);
+        e.cutToPos(0, 0.f); e.setPlayFlag(0, true);
+        std::vector<double> s = runSync(e, views, (int)SR);
+        CHECK_NEAR(s.back(), 1.0, 0.01);
+    }
+    {   // stopped, no buffer, or disabled: the signal holds
+        Eng e; e.setSampleRate(SR); e.setNumVoices(1);
+        softkut::BufferView views[NV] = {mono(store.data(), F)};
+        e.setLoopEnd(0, 0.9f); e.cutToPos(0, 0.3f); e.setPlayFlag(0, true);
+        runSync(e, views, 640);
+        e.setPlayFlag(0, false);
+        std::vector<double> s = runSync(e, views, 640);
+        CHECK_NEAR(s.front(), s.back(), 1e-12);
+        const double held = s.back();
+        softkut::BufferView none[NV] = {mono(NULL, 0)};
+        s = runSync(e, none, 640);
+        CHECK_NEAR(s.front(), held, 1e-12);
+        CHECK_NEAR(s.back(), held, 1e-12);
+        e.setEnabled(0, false); e.setPlayFlag(0, true);
+        s = runSync(e, views, 640);
+        CHECK_NEAR(s.back(), held, 1e-12);
+    }
+}
+
+// Messages use ms and count voices from 1; the engine uses seconds and 0-based
+// voices. softkut_units.h is the single conversion.
+static void test_message_units()
+{
+    std::printf("test_message_units\n");
+    using softkut::CmdId;
+    const CmdId times[] = {CmdId::LoopStart, CmdId::LoopEnd, CmdId::FadeTime, CmdId::Position,
+                           CmdId::RecOffset, CmdId::RecPreSlewTime, CmdId::RateSlewTime,
+                           CmdId::LevelSlewTime, CmdId::PanSlewTime, CmdId::PhaseQuant,
+                           CmdId::PhaseOffset, CmdId::VoiceSync};
+    for (CmdId id : times) {
+        CHECK(softkut::isTime(id));
+        CHECK_NEAR(softkut::toEngine(id, 1500.0), 1.5, 1e-6);
+        CHECK_NEAR(softkut::toUser(id, 1.5), 1500.0, 1e-9);
+    }
+    const CmdId values[] = {CmdId::Rate, CmdId::RecLevel, CmdId::PreLevel, CmdId::PlayFlag,
+                            CmdId::PostFilterFc, CmdId::PostFilterRq, CmdId::Level, CmdId::Pan,
+                            CmdId::FbLevel, CmdId::InLevel, CmdId::Enable};
+    for (CmdId id : values) {
+        CHECK(!softkut::isTime(id));
+        CHECK_NEAR(softkut::toEngine(id, 0.75), 0.75, 1e-9);
+    }
+    CHECK(softkut::toIndex(1, 6) == 0);
+    CHECK(softkut::toIndex(6, 6) == 5);
+    CHECK(softkut::toIndex(0, 6) == -1);
+    CHECK(softkut::toIndex(7, 6) == -1);
+    CHECK(softkut::toIndex(-1, 6) == -1);
+}
+
 // ---------------------------------------------------------------------------
 int main()
 {
@@ -1279,6 +1416,9 @@ int main()
     test_buffer_sample_rate();
     test_sync_across_store_rates();
     test_reset_restarts();
+    test_phase_wraps_to_buffer();
+    test_sync_signal();
+    test_message_units();
 
     std::printf("\n%d checks, %d failures\n", g_total, g_fail);
     return g_fail == 0 ? 0 : 1;

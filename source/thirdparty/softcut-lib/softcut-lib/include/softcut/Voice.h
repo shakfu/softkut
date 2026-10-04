@@ -77,7 +77,10 @@ namespace softcut {
         void cutToPos(float sec);
 
         // process a single channel
-        void processBlockMono(const float *in, float *out, int numFrames);
+        // softkut patch: phaseOut (optional) receives the active head's phase,
+        // in buffer frames, after each sample
+        void processBlockMono(const float *in, float *out, int numFrames,
+                              phase_t *phaseOut = nullptr);
 
         void setRecOffset(float d);
 

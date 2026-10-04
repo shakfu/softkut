@@ -4,17 +4,17 @@
 <c74object name='softkut~' module='msp' category='MSP Sampling'>
 
 	<digest>
-		Six-voice softcut-lib buffer looper
+		softcut-lib buffer looper
 	</digest>
 
 	<description>
-		softkut~ wraps monome's softcut-lib (the norns looping engine). It provides six independent
-		voices that read and write a shared (or per-voice) buffer~, with sub-sample looping,
-		crossfaded overdub, resampling read/write heads, per-voice input and output multimode
-		filters, per-voice output level, and inlet-to-voice and voice-to-voice routing
-		matrices. Most messages address a single voice as &lt;voice&gt; in the range 0-5; times are
-		in seconds of buffer material. Any buffer~ works: any length, any channel count (each voice
-		uses one channel), and its own sample rate (rate 1 plays at recorded speed).
+		softkut~ wraps monome's softcut-lib (the norns looping engine). It provides 1-6 voices
+		that read and write a shared (or per-voice) buffer~, with sub-sample looping, crossfaded
+		overdub, resampling read/write heads, per-voice input and output multimode filters,
+		per-voice output level, and inlet-to-voice and voice-to-voice routing matrices. Most
+		messages address a single voice as &lt;voice&gt;, counted from 1; times are in ms of
+		buffer material. Any buffer~ works: any length, any channel count (each voice uses one
+		channel), and its own sample rate (rate 1 plays at recorded speed).
 	</description>
 
 
@@ -32,31 +32,11 @@
 
 	<inletlist>
 		<inlet id="0" type="signal">
-			<digest>Voice 0 record input / control messages</digest>
+			<digest>Voice 1 record input / control messages</digest>
 			<description>
-				Signal record input for voice 0. All control messages are also sent to this (left)
-				inlet.
+				Signal record input for voice 1. All control messages go to this (left) inlet. There
+				is one record-input inlet per voice: inlet n is voice n + 1.
 			</description>
-		</inlet>
-		<inlet id="1" type="signal">
-			<digest>Voice 1 record input</digest>
-			<description>Signal record input for voice 1.</description>
-		</inlet>
-		<inlet id="2" type="signal">
-			<digest>Voice 2 record input</digest>
-			<description>Signal record input for voice 2.</description>
-		</inlet>
-		<inlet id="3" type="signal">
-			<digest>Voice 3 record input</digest>
-			<description>Signal record input for voice 3.</description>
-		</inlet>
-		<inlet id="4" type="signal">
-			<digest>Voice 4 record input</digest>
-			<description>Signal record input for voice 4.</description>
-		</inlet>
-		<inlet id="5" type="signal">
-			<digest>Voice 5 record input</digest>
-			<description>Signal record input for voice 5.</description>
 		</inlet>
 	</inletlist>
 
@@ -65,35 +45,28 @@
 
 	<outletlist>
 		<outlet id="0" type="signal">
-			<digest>Voice 0 output</digest>
-			<description>Voice 0 playback output (post level, pre pan).</description>
+			<digest>Voice 1 output</digest>
+			<description>
+				Voice 1 playback (post level). With N voices, outlets 0 to N - 1 are the voices'
+				audio.
+			</description>
 		</outlet>
 		<outlet id="1" type="signal">
-			<digest>Voice 1 output</digest>
-			<description>Voice 1 playback output.</description>
-		</outlet>
-		<outlet id="2" type="signal">
-			<digest>Voice 2 output</digest>
-			<description>Voice 2 playback output.</description>
-		</outlet>
-		<outlet id="3" type="signal">
-			<digest>Voice 3 output</digest>
-			<description>Voice 3 playback output.</description>
-		</outlet>
-		<outlet id="4" type="signal">
-			<digest>Voice 4 output</digest>
-			<description>Voice 4 playback output.</description>
-		</outlet>
-		<outlet id="5" type="signal">
-			<digest>Voice 5 output</digest>
-			<description>Voice 5 playback output.</description>
-		</outlet>
-		<outlet id="6" type="list">
-			<digest>Phase / position reports</digest>
+			<digest>Voice 1 sync (play head, ms)</digest>
 			<description>
-				Emits "position &lt;p0&gt; ... &lt;p5&gt;" in response to a poll message, and (when the
-				report attribute is non-zero) "phase &lt;voice&gt; &lt;quantphase&gt;" whenever a voice's
-				quantized phase changes.
+				Voice 1's play head as a signal, in ms of buffer material, wrapped to the buffer's
+				length, like groove~'s sync outlet. With N voices, outlets N to 2N - 1 are the
+				voices' sync signals. Use snapshot~ to drive a waveform~ cursor.
+			</description>
+		</outlet>
+		<outlet id="2" type="list">
+			<digest>Reports</digest>
+			<description>
+				The rightmost outlet. Sends "phase &lt;voice&gt; &lt;ms&gt;" every @report ms for each
+				voice whose position changed, and one "info &lt;voice&gt; &lt;pos&gt; &lt;play&gt;
+				&lt;rec&gt; &lt;start&gt; &lt;end&gt; &lt;window&gt; &lt;state&gt; &lt;position&gt;"
+				list per voice on poll: pos is 0-1 within the loop window, the times are ms, and
+				state is 0 stopped, 1 playing, 2 recording, 3 overdub. Ports shown are for one voice.
 			</description>
 		</outlet>
 	</outletlist>
@@ -105,17 +78,16 @@
 		<objarg name="buffer-name" optional="1" type="symbol">
 			<digest>Name of the shared buffer~</digest>
 			<description>
-				Sets the buffer~ that all voices read and write; voice v uses channel v mod the
-				buffer~'s channel count. Can be changed later with
+				Sets the buffer~ that all voices read and write; voice v uses channel v, wrapping
+				when there are more voices than channels. Can be changed later with
 				the set message, or overridden per voice with voicebuf.
 			</description>
 		</objarg>
 		<objarg name="channels" optional="1" type="int">
 			<digest>Voice count (default 1, max 6)</digest>
 			<description>
-				Number of voices, which sets the number of signal inlets (record inputs) and
-				outlets. Defaults to 1 (mono); clamped to the range 1-6. The inlet/outlet list
-				shown here is for the maximum of 6 voices.
+				Number of voices: one record inlet, one audio outlet and one sync outlet per voice.
+				Defaults to 1; clamped to the range 1-6.
 			</description>
 		</objarg>
 	</objarglist>
@@ -163,10 +135,10 @@
 		<method name="position">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Jump the play head to a position</digest>
-			<description>Cuts the voice's play head to the given position in seconds within the buffer.</description>
+			<description>Cuts the voice's play head to the given position in ms within the buffer.</description>
 		</method>
 
 		<method name="enable">
@@ -193,19 +165,19 @@
 		<method name="loopstart">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
-			<digest>Set loop start point (seconds)</digest>
-			<description>Loop start position in seconds.</description>
+			<digest>Set loop start point (ms)</digest>
+			<description>Loop start position in ms.</description>
 		</method>
 
 		<method name="loopend">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
-			<digest>Set loop end point (seconds)</digest>
-			<description>Loop end position in seconds.</description>
+			<digest>Set loop end point (ms)</digest>
+			<description>Loop end position in ms.</description>
 		</method>
 
 		<method name="loop">
@@ -220,10 +192,10 @@
 		<method name="fade">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set loop/record crossfade time</digest>
-			<description>Crossfade time in seconds for loop wrap and record transitions.</description>
+			<description>Crossfade time in ms for loop wrap and record transitions.</description>
 		</method>
 
 		<method name="reclevel">
@@ -247,10 +219,10 @@
 		<method name="recoffset">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set record-head offset</digest>
-			<description>Offset of the record head relative to the play head, in seconds (default approximately -8 samples).</description>
+			<description>Offset of the record head relative to the play head, in ms (default approximately -8 samples).</description>
 		</method>
 
 		<method name="prefc">
@@ -409,16 +381,16 @@
 		<method name="levelslew">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set level smoothing time</digest>
-			<description>Smoothing (slew) time in seconds for the level message.</description>
+			<description>Smoothing (slew) time in ms for the level message.</description>
 		</method>
 
 		<method name="panslew">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set pan smoothing time (no effect)</digest>
 			<description>Accepted for compatibility but has no effect (see pan).</description>
@@ -427,52 +399,52 @@
 		<method name="recpreslew">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set record/pre level slew time</digest>
-			<description>Smoothing time in seconds for record and pre levels inside softcut.</description>
+			<description>Smoothing time in ms for record and pre levels inside softcut.</description>
 		</method>
 
 		<method name="rateslew">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set rate slew time</digest>
-			<description>Smoothing time in seconds for rate changes.</description>
+			<description>Smoothing time in ms for rate changes.</description>
 		</method>
 
 		<method name="quant">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="unit" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
-			<digest>Set phase quantization unit</digest>
-			<description>Quantization unit for the reported (quantized) phase of the voice.</description>
+			<digest>Set phase quantization step</digest>
+			<description>Reports phase in steps of this many ms; 0 (the default) is unquantized.</description>
 		</method>
 
 		<method name="phaseoffset">
 			<arglist>
 				<arg name="voice" type="int" optional="0" />
-				<arg name="seconds" type="float" optional="0" />
+				<arg name="ms" type="float" optional="0" />
 			</arglist>
 			<digest>Set reported phase offset</digest>
-			<description>Offset in seconds applied to the voice's reported phase.</description>
+			<description>Offset in ms added to the voice's reported phase. softcut applies it only when quant is above 0.</description>
 		</method>
 
 		<method name="sync">
 			<arglist>
 				<arg name="follow" type="int" optional="0" />
 				<arg name="lead" type="int" optional="0" />
-				<arg name="offset" type="float" optional="0" />
+				<arg name="offset-ms" type="float" optional="0" />
 			</arglist>
 			<digest>Sync one voice to another</digest>
-			<description>Snaps voice follow to voice lead's current position plus offset seconds.</description>
+			<description>Jumps voice follow to voice lead's current position plus offset ms. Voices count from 1.</description>
 		</method>
 
 		<method name="poll">
-			<digest>Report voice positions</digest>
-			<description>Emits "position &lt;p0&gt; ... &lt;p5&gt;" out the report outlet.</description>
+			<digest>Report each voice's state</digest>
+			<description>Sends one info list per voice out the report outlet (see the report outlet).</description>
 		</method>
 
 		<method name="set">
@@ -481,7 +453,7 @@
 				<arg name="channel" type="int" optional="1" />
 			</arglist>
 			<digest>Set the shared buffer~</digest>
-			<description>Points all voices at the named buffer~. With a 1-based channel, every voice uses it; without, voice v uses channel v mod the channel count.</description>
+			<description>Points all voices at the named buffer~. With a channel (from 1), every voice uses it; without, voice v uses channel v, wrapping.</description>
 		</method>
 
 		<method name="voicebuf">
@@ -491,7 +463,7 @@
 				<arg name="channel" type="int" optional="1" />
 			</arglist>
 			<digest>Set one voice's buffer~</digest>
-			<description>Points a single voice at its own buffer~ and optional 1-based channel, overriding set.</description>
+			<description>Points a single voice (from 1) at its own buffer~ and optional channel (from 1), overriding set.</description>
 		</method>
 
 		<method name="inlevel">
@@ -502,7 +474,7 @@
 			</arglist>
 			<digest>Route an inlet into a voice's record input</digest>
 			<description>
-				Input routing matrix. Routes signal inlet (0-5) into the given voice's record input at
+				Input routing matrix. Routes signal inlet (from 1) into the given voice's record input at
 				gain. Defaults to identity (inlet v -&gt; voice v at unity); off-diagonal entries let one
 				input feed several voices.
 			</description>
@@ -525,8 +497,9 @@
 		<method name="reset">
 			<digest>Reset all voices to defaults</digest>
 			<description>
-				Resets all voices and routing to defaults: rate 1, 1 second loop, looping on, level 1,
-				pan centre, no feedback, identity input routing.
+				Stops every voice and restores every default: rate 1, 0-1000 ms loop, looping on,
+				level 1, no feedback, identity input routing. The next play starts from the loop
+				start. The buffer~ assignment and @report are kept.
 			</description>
 		</method>
 
@@ -540,9 +513,8 @@
 		<attribute name='report' get='1' set='1' type='int' size='1' >
 			<digest>Phase report interval (ms)</digest>
 			<description>
-				Interval in milliseconds at which the report outlet emits "phase &lt;voice&gt;
-				&lt;quantphase&gt;" messages when a voice's quantized phase changes. 0 (the default)
-				disables automatic reporting.
+				Interval in ms at which the report outlet sends "phase &lt;voice&gt; &lt;ms&gt;" for each
+				voice whose position changed. 0 (the default) disables it. Takes effect at once.
 			</description>
 		</attribute>
 

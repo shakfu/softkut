@@ -133,7 +133,7 @@
                                         660.0,
                                         36.0
                                     ],
-                                    "text": "Messages take <voice> <value>; voices count from 0. Times are seconds of buffer material. The view at the bottom shows the buffer~, the moving play head and the loop window."
+                                    "text": "Messages take <voice> <value>; voices count from 1. Times are ms of buffer material. The view at the bottom shows the buffer~, the moving play head and the loop window."
                                 }
                             },
                             {
@@ -145,10 +145,10 @@
                                     "patching_rect": [
                                         15.0,
                                         98.0,
-                                        296.0,
+                                        303.0,
                                         22.0
                                     ],
-                                    "text": "loopstart 0 0.2, loopend 0 1.2, play 0 1",
+                                    "text": "loopstart 1 200, loopend 1 1200, play 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -166,7 +166,7 @@
                                         72.0,
                                         22.0
                                     ],
-                                    "text": "play 0 0",
+                                    "text": "play 1 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -199,7 +199,7 @@
                                         72.0,
                                         22.0
                                     ],
-                                    "text": "rate 0 1",
+                                    "text": "rate 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -217,7 +217,7 @@
                                         86.0,
                                         22.0
                                     ],
-                                    "text": "rate 0 0.5",
+                                    "text": "rate 1 0.5",
                                     "outlettype": [
                                         ""
                                     ]
@@ -235,7 +235,7 @@
                                         79.0,
                                         22.0
                                     ],
-                                    "text": "rate 0 -1",
+                                    "text": "rate 1 -1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -268,7 +268,7 @@
                                         114.0,
                                         22.0
                                     ],
-                                    "text": "position 0 0.6",
+                                    "text": "position 1 600",
                                     "outlettype": [
                                         ""
                                     ]
@@ -283,10 +283,10 @@
                                     "patching_rect": [
                                         137.0,
                                         216.0,
-                                        220.0,
+                                        200.0,
                                         21.0
                                     ],
-                                    "text": "jump the play head (seconds)"
+                                    "text": "jump the play head (ms)"
                                 }
                             },
                             {
@@ -319,7 +319,7 @@
                                         360.0,
                                         51.0
                                     ],
-                                    "text": "reset: stop every voice and restore every default (loop 0-1 s, rate 1, level 1, no feedback). The buffer~ and @report are kept."
+                                    "text": "reset: stop every voice and restore every default (loop 0-1000 ms, rate 1, level 1, no feedback). The buffer~ and @report are kept."
                                 }
                             },
                             {
@@ -397,7 +397,7 @@
                                     "id": "obj-18",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
-                                    "numoutlets": 2,
+                                    "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
                                         313.0,
@@ -406,6 +406,7 @@
                                     ],
                                     "text": "softkut~ skh_basic",
                                     "outlettype": [
+                                        "signal",
                                         "signal",
                                         ""
                                     ]
@@ -463,7 +464,7 @@
                                 "box": {
                                     "id": "obj-22",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
@@ -475,7 +476,7 @@
                                     "args": [
                                         "skh_basic",
                                         1,
-                                        0
+                                        1
                                     ],
                                     "outlettype": [
                                         ""
@@ -655,13 +656,26 @@
                                 "patchline": {
                                     "source": [
                                         "obj-18",
-                                        1
+                                        2
                                     ],
                                     "destination": [
                                         "obj-22",
                                         0
                                     ],
                                     "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-18",
+                                        1
+                                    ],
+                                    "destination": [
+                                        "obj-22",
+                                        1
+                                    ],
+                                    "order": 1
                                 }
                             },
                             {
@@ -714,7 +728,7 @@
                             0.0,
                             26.0,
                             720.0,
-                            877.0
+                            878.0
                         ],
                         "bglocked": 0,
                         "openinpresentation": 0,
@@ -773,9 +787,9 @@
                                         15.0,
                                         48.0,
                                         660.0,
-                                        36.0
+                                        51.0
                                     ],
-                                    "text": "Each voice reads and writes one channel. By default voice v uses channel v mod the channel count: on this stereo buffer~, voice 0 plays the left channel (bells) and voice 1 the right (bass)."
+                                    "text": "Each voice reads and writes one channel. By default voice 1 uses channel 1, voice 2 channel 2, and so on, wrapping when there are more voices than channels: on this stereo buffer~, voice 1 plays the left channel (bells) and voice 2 the right (bass)."
                                 }
                             },
                             {
@@ -786,11 +800,11 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        98.0,
-                                        324.0,
+                                        113.0,
+                                        366.0,
                                         22.0
                                     ],
-                                    "text": "loopend 0 2, loopend 1 2, play 0 1, play 1 1",
+                                    "text": "loopend 1 2000, loopend 2 2000, play 1 1, play 2 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -804,11 +818,11 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        128.0,
+                                        143.0,
                                         142.0,
                                         22.0
                                     ],
-                                    "text": "play 0 0, play 1 0",
+                                    "text": "play 1 0, play 2 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -822,7 +836,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        158.0,
+                                        173.0,
                                         114.0,
                                         22.0
                                     ],
@@ -840,11 +854,11 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         137.0,
-                                        158.0,
+                                        173.0,
                                         300.0,
                                         36.0
                                     ],
-                                    "text": "default: voice 0 -> channel 1, voice 1 -> channel 2"
+                                    "text": "default: voice 1 -> channel 1, voice 2 -> channel 2"
                                 }
                             },
                             {
@@ -855,7 +869,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        202.0,
+                                        217.0,
                                         128.0,
                                         22.0
                                     ],
@@ -873,11 +887,11 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         151.0,
-                                        202.0,
-                                        300.0,
-                                        36.0
+                                        217.0,
+                                        220.0,
+                                        21.0
                                     ],
-                                    "text": "both voices read channel 1 (channels count from 1)"
+                                    "text": "both voices read channel 1"
                                 }
                             },
                             {
@@ -888,11 +902,11 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        246.0,
+                                        247.0,
                                         177.0,
                                         22.0
                                     ],
-                                    "text": "voicebuf 1 skh_stereo 2",
+                                    "text": "voicebuf 2 skh_stereo 2",
                                     "outlettype": [
                                         ""
                                     ]
@@ -906,11 +920,11 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         200.0,
-                                        246.0,
+                                        247.0,
                                         220.0,
                                         21.0
                                     ],
-                                    "text": "voice 1 alone reads channel 2"
+                                    "text": "voice 2 alone reads channel 2"
                                 }
                             },
                             {
@@ -921,11 +935,11 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        276.0,
+                                        277.0,
                                         177.0,
                                         22.0
                                     ],
-                                    "text": "voicebuf 1 skh_stereo 3",
+                                    "text": "voicebuf 2 skh_stereo 3",
                                     "outlettype": [
                                         ""
                                     ]
@@ -939,11 +953,11 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         200.0,
-                                        276.0,
+                                        277.0,
                                         230.0,
                                         36.0
                                     ],
-                                    "text": "no channel 3: voice 1 falls silent, with one console warning"
+                                    "text": "no channel 3: voice 2 falls silent, with one console warning"
                                 }
                             },
                             {
@@ -954,11 +968,11 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        320.0,
+                                        321.0,
                                         86.0,
                                         22.0
                                     ],
-                                    "text": "rate 1 0.5",
+                                    "text": "rate 2 0.5",
                                     "outlettype": [
                                         ""
                                     ]
@@ -972,7 +986,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         109.0,
-                                        320.0,
+                                        321.0,
                                         150.0,
                                         21.0
                                     ],
@@ -987,7 +1001,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        350.0,
+                                        351.0,
                                         51.0,
                                         22.0
                                     ],
@@ -1005,7 +1019,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         74.0,
-                                        350.0,
+                                        351.0,
                                         100.0,
                                         21.0
                                     ],
@@ -1020,7 +1034,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         480.0,
-                                        98.0,
+                                        113.0,
                                         72.0,
                                         22.0
                                     ],
@@ -1038,7 +1052,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         480.0,
-                                        128.0,
+                                        143.0,
                                         198.0,
                                         22.0
                                     ],
@@ -1056,7 +1070,7 @@
                                     "numoutlets": 2,
                                     "patching_rect": [
                                         480.0,
-                                        158.0,
+                                        173.0,
                                         142.0,
                                         22.0
                                     ],
@@ -1075,7 +1089,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         480.0,
-                                        188.0,
+                                        203.0,
                                         220.0,
                                         66.0
                                     ],
@@ -1087,15 +1101,17 @@
                                     "id": "obj-21",
                                     "maxclass": "newobj",
                                     "numinlets": 2,
-                                    "numoutlets": 3,
+                                    "numoutlets": 5,
                                     "patching_rect": [
                                         15.0,
-                                        388.0,
+                                        389.0,
                                         163.0,
                                         22.0
                                     ],
                                     "text": "softkut~ skh_stereo 2",
                                     "outlettype": [
+                                        "signal",
+                                        "signal",
                                         "signal",
                                         "signal",
                                         ""
@@ -1110,7 +1126,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         480.0,
-                                        388.0,
+                                        389.0,
                                         58.0,
                                         22.0
                                     ],
@@ -1128,7 +1144,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         546.0,
-                                        388.0,
+                                        389.0,
                                         58.0,
                                         22.0
                                     ],
@@ -1146,7 +1162,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         612.0,
-                                        388.0,
+                                        389.0,
                                         45.0,
                                         45.0
                                     ],
@@ -1161,7 +1177,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         665.0,
-                                        388.0,
+                                        389.0,
                                         90.0,
                                         21.0
                                     ],
@@ -1172,11 +1188,11 @@
                                 "box": {
                                     "id": "obj-26",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        441.0,
+                                        442.0,
                                         520.0,
                                         180.0
                                     ],
@@ -1184,7 +1200,7 @@
                                     "args": [
                                         "skh_stereo",
                                         1,
-                                        0
+                                        1
                                     ],
                                     "outlettype": [
                                         ""
@@ -1206,11 +1222,11 @@
                                 "box": {
                                     "id": "obj-27",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        629.0,
+                                        630.0,
                                         520.0,
                                         180.0
                                     ],
@@ -1218,7 +1234,7 @@
                                     "args": [
                                         "skh_stereo",
                                         2,
-                                        1
+                                        2
                                     ],
                                     "outlettype": [
                                         ""
@@ -1244,11 +1260,11 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         15.0,
-                                        817.0,
+                                        818.0,
                                         520.0,
                                         36.0
                                     ],
-                                    "text": "The views show channels 1 and 2. After set skh_stereo 1, voice 1's play head still moves over the channel 2 view, but it reads channel 1."
+                                    "text": "The views show channels 1 and 2. After set skh_stereo 1, voice 2's play head still moves over the channel 2 view, but it reads channel 1."
                                 }
                             }
                         ],
@@ -1439,13 +1455,26 @@
                                 "patchline": {
                                     "source": [
                                         "obj-21",
-                                        2
+                                        4
                                     ],
                                     "destination": [
                                         "obj-26",
                                         0
                                     ],
                                     "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-21",
+                                        2
+                                    ],
+                                    "destination": [
+                                        "obj-26",
+                                        1
+                                    ],
+                                    "order": 1
                                 }
                             },
                             {
@@ -1465,13 +1494,26 @@
                                 "patchline": {
                                     "source": [
                                         "obj-21",
-                                        2
+                                        4
                                     ],
                                     "destination": [
                                         "obj-27",
                                         0
                                     ],
                                     "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-21",
+                                        3
+                                    ],
+                                    "destination": [
+                                        "obj-27",
+                                        1
+                                    ],
+                                    "order": 1
                                 }
                             },
                             {
@@ -1597,10 +1639,10 @@
                                     "patching_rect": [
                                         15.0,
                                         98.0,
-                                        268.0,
+                                        289.0,
                                         22.0
                                     ],
-                                    "text": "loopstart 0 0, loopend 0 1, play 0 1",
+                                    "text": "loopstart 1 0, loopend 1 1000, play 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -1618,7 +1660,7 @@
                                         72.0,
                                         22.0
                                     ],
-                                    "text": "play 0 0",
+                                    "text": "play 1 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -1636,7 +1678,7 @@
                                         380.0,
                                         51.0
                                     ],
-                                    "text": "Loop times are seconds at the buffer~'s rate. After sr 22050, loopend 1 covers 22050 frames, so the loop window in the view doubles."
+                                    "text": "Loop times are ms at the buffer~'s rate. After sr 22050, loopend 1000 covers 22050 frames, so the loop window in the view doubles."
                                 }
                             },
                             {
@@ -1801,7 +1843,7 @@
                                     "id": "obj-15",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
-                                    "numoutlets": 2,
+                                    "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
                                         285.0,
@@ -1810,6 +1852,7 @@
                                     ],
                                     "text": "softkut~ skh_sr",
                                     "outlettype": [
+                                        "signal",
                                         "signal",
                                         ""
                                     ]
@@ -1867,7 +1910,7 @@
                                 "box": {
                                     "id": "obj-19",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
@@ -1879,7 +1922,7 @@
                                     "args": [
                                         "skh_sr",
                                         1,
-                                        0
+                                        1
                                     ],
                                     "outlettype": [
                                         ""
@@ -2046,13 +2089,26 @@
                                 "patchline": {
                                     "source": [
                                         "obj-15",
-                                        1
+                                        2
                                     ],
                                     "destination": [
                                         "obj-19",
                                         0
                                     ],
                                     "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-15",
+                                        1
+                                    ],
+                                    "destination": [
+                                        "obj-19",
+                                        1
+                                    ],
+                                    "order": 1
                                 }
                             },
                             {
@@ -2178,10 +2234,10 @@
                                     "patching_rect": [
                                         15.0,
                                         98.0,
-                                        226.0,
+                                        247.0,
                                         22.0
                                     ],
-                                    "text": "loopend 0 2, rec 0 1, play 0 1",
+                                    "text": "loopend 1 2000, rec 1 1, play 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2199,7 +2255,7 @@
                                         65.0,
                                         22.0
                                     ],
-                                    "text": "rec 0 0",
+                                    "text": "rec 1 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2232,7 +2288,7 @@
                                         100.0,
                                         22.0
                                     ],
-                                    "text": "prelevel 0 0",
+                                    "text": "prelevel 1 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2250,7 +2306,7 @@
                                         114.0,
                                         22.0
                                     ],
-                                    "text": "prelevel 0 0.7",
+                                    "text": "prelevel 1 0.7",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2268,7 +2324,7 @@
                                         100.0,
                                         22.0
                                     ],
-                                    "text": "prelevel 0 1",
+                                    "text": "prelevel 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2467,7 +2523,7 @@
                                     "id": "obj-20",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
-                                    "numoutlets": 2,
+                                    "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
                                         269.0,
@@ -2476,6 +2532,7 @@
                                     ],
                                     "text": "softkut~ skh_rec",
                                     "outlettype": [
+                                        "signal",
                                         "signal",
                                         ""
                                     ]
@@ -2533,7 +2590,7 @@
                                 "box": {
                                     "id": "obj-24",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
@@ -2545,7 +2602,7 @@
                                     "args": [
                                         "skh_rec",
                                         1,
-                                        0
+                                        1
                                     ],
                                     "outlettype": [
                                         ""
@@ -2751,13 +2808,26 @@
                                 "patchline": {
                                     "source": [
                                         "obj-20",
-                                        1
+                                        2
                                     ],
                                     "destination": [
                                         "obj-24",
                                         0
                                     ],
                                     "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-20",
+                                        1
+                                    ],
+                                    "destination": [
+                                        "obj-24",
+                                        1
+                                    ],
+                                    "order": 1
                                 }
                             },
                             {
@@ -2855,7 +2925,7 @@
                                         640.0,
                                         28.0
                                     ],
-                                    "text": "Position reports",
+                                    "text": "Play head and reports",
                                     "fontsize": 16.0
                                 }
                             },
@@ -2871,7 +2941,7 @@
                                         660.0,
                                         36.0
                                     ],
-                                    "text": "The right outlet reports the play head. report <ms> starts or stops phase messages at once, also while audio runs. The view at the bottom is driven by these reports."
+                                    "text": "The sync outlet (second from right) is the play head as a signal, in ms of the buffer~, like groove~'s sync outlet. The right outlet sends phase messages every @report ms, and info lists on poll."
                                 }
                             },
                             {
@@ -2883,10 +2953,10 @@
                                     "patching_rect": [
                                         15.0,
                                         98.0,
-                                        163.0,
+                                        184.0,
                                         22.0
                                     ],
-                                    "text": "loopend 0 2, play 0 1",
+                                    "text": "loopend 1 2000, play 1 1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2937,10 +3007,10 @@
                                     "patching_rect": [
                                         182.0,
                                         128.0,
-                                        100.0,
+                                        93.0,
                                         22.0
                                     ],
-                                    "text": "quant 0 0.25",
+                                    "text": "quant 1 250",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2953,12 +3023,12 @@
                                     "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
-                                        290.0,
+                                        283.0,
                                         128.0,
                                         79.0,
                                         22.0
                                     ],
-                                    "text": "quant 0 0",
+                                    "text": "quant 1 0",
                                     "outlettype": [
                                         ""
                                     ]
@@ -2976,7 +3046,7 @@
                                         400.0,
                                         36.0
                                     ],
-                                    "text": "report 0 freezes the play head; quant moves it in 0.25 s steps"
+                                    "text": "report starts or stops phase messages at once; quant reports in 250 ms steps"
                                 }
                             },
                             {
@@ -3007,9 +3077,9 @@
                                         67.0,
                                         202.0,
                                         380.0,
-                                        36.0
+                                        51.0
                                     ],
-                                    "text": "poll: one info list per voice: voice, position 0-1 in the loop, play, rec, start ms, end ms, window ms, state"
+                                    "text": "poll: one info list per voice: voice, position 0-1 in the loop, play, rec, start ms, end ms, window ms, state, play head ms"
                                 }
                             },
                             {
@@ -3020,7 +3090,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        246.0,
+                                        261.0,
                                         51.0,
                                         22.0
                                     ],
@@ -3038,7 +3108,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         74.0,
-                                        246.0,
+                                        261.0,
                                         100.0,
                                         21.0
                                     ],
@@ -3105,15 +3175,16 @@
                                     "id": "obj-16",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
-                                    "numoutlets": 2,
+                                    "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
-                                        284.0,
+                                        299.0,
                                         128.0,
                                         22.0
                                     ],
                                     "text": "softkut~ skh_rep",
                                     "outlettype": [
+                                        "signal",
                                         "signal",
                                         ""
                                     ]
@@ -3127,7 +3198,7 @@
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         480.0,
-                                        284.0,
+                                        299.0,
                                         58.0,
                                         22.0
                                     ],
@@ -3145,7 +3216,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         546.0,
-                                        284.0,
+                                        299.0,
                                         45.0,
                                         45.0
                                     ],
@@ -3160,7 +3231,7 @@
                                     "numoutlets": 0,
                                     "patching_rect": [
                                         599.0,
-                                        284.0,
+                                        299.0,
                                         90.0,
                                         21.0
                                     ],
@@ -3171,11 +3242,63 @@
                                 "box": {
                                     "id": "obj-20",
                                     "maxclass": "newobj",
+                                    "numinlets": 2,
+                                    "numoutlets": 1,
+                                    "patching_rect": [
+                                        15.0,
+                                        352.0,
+                                        100.0,
+                                        22.0
+                                    ],
+                                    "text": "snapshot~ 50",
+                                    "outlettype": [
+                                        "float"
+                                    ]
+                                }
+                            },
+                            {
+                                "box": {
+                                    "id": "obj-21",
+                                    "maxclass": "flonum",
+                                    "numinlets": 1,
+                                    "numoutlets": 2,
+                                    "patching_rect": [
+                                        123.0,
+                                        352.0,
+                                        80.0,
+                                        22.0
+                                    ],
+                                    "outlettype": [
+                                        "",
+                                        "bang"
+                                    ],
+                                    "parameter_enable": 0
+                                }
+                            },
+                            {
+                                "box": {
+                                    "id": "obj-22",
+                                    "maxclass": "comment",
+                                    "numinlets": 1,
+                                    "numoutlets": 0,
+                                    "patching_rect": [
+                                        211.0,
+                                        352.0,
+                                        70.0,
+                                        21.0
+                                    ],
+                                    "text": "sync (ms)"
+                                }
+                            },
+                            {
+                                "box": {
+                                    "id": "obj-23",
+                                    "maxclass": "newobj",
                                     "numinlets": 3,
                                     "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
-                                        337.0,
+                                        382.0,
                                         128.0,
                                         22.0
                                     ],
@@ -3189,13 +3312,13 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-21",
+                                    "id": "obj-24",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
                                     "numoutlets": 2,
                                     "patching_rect": [
                                         151.0,
-                                        337.0,
+                                        382.0,
                                         93.0,
                                         22.0
                                     ],
@@ -3208,14 +3331,14 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-22",
+                                    "id": "obj-25",
                                     "maxclass": "flonum",
                                     "numinlets": 1,
                                     "numoutlets": 2,
                                     "patching_rect": [
                                         252.0,
-                                        337.0,
-                                        70.0,
+                                        382.0,
+                                        80.0,
                                         22.0
                                     ],
                                     "outlettype": [
@@ -3227,28 +3350,28 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-23",
+                                    "id": "obj-26",
                                     "maxclass": "comment",
                                     "numinlets": 1,
                                     "numoutlets": 0,
                                     "patching_rect": [
-                                        330.0,
-                                        337.0,
-                                        70.0,
+                                        340.0,
+                                        382.0,
+                                        80.0,
                                         21.0
                                     ],
-                                    "text": "phase (s)"
+                                    "text": "phase (ms)"
                                 }
                             },
                             {
                                 "box": {
-                                    "id": "obj-24",
+                                    "id": "obj-27",
                                     "maxclass": "newobj",
                                     "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        367.0,
+                                        412.0,
                                         93.0,
                                         22.0
                                     ],
@@ -3260,14 +3383,14 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-25",
+                                    "id": "obj-28",
                                     "maxclass": "message",
                                     "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         116.0,
-                                        367.0,
-                                        300.0,
+                                        412.0,
+                                        340.0,
                                         22.0
                                     ],
                                     "text": "",
@@ -3278,13 +3401,13 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-26",
+                                    "id": "obj-29",
                                     "maxclass": "comment",
                                     "numinlets": 1,
                                     "numoutlets": 0,
                                     "patching_rect": [
-                                        424.0,
-                                        367.0,
+                                        464.0,
+                                        412.0,
                                         90.0,
                                         21.0
                                     ],
@@ -3293,13 +3416,13 @@
                             },
                             {
                                 "box": {
-                                    "id": "obj-27",
+                                    "id": "obj-30",
                                     "maxclass": "bpatcher",
-                                    "numinlets": 1,
+                                    "numinlets": 2,
                                     "numoutlets": 1,
                                     "patching_rect": [
                                         15.0,
-                                        397.0,
+                                        442.0,
                                         520.0,
                                         180.0
                                     ],
@@ -3307,7 +3430,7 @@
                                     "args": [
                                         "skh_rep",
                                         1,
-                                        0
+                                        1
                                     ],
                                     "outlettype": [
                                         ""
@@ -3512,11 +3635,11 @@
                             {
                                 "patchline": {
                                     "source": [
-                                        "obj-21",
-                                        1
+                                        "obj-16",
+                                        2
                                     ],
                                     "destination": [
-                                        "obj-22",
+                                        "obj-23",
                                         0
                                     ],
                                     "order": 0
@@ -3525,8 +3648,8 @@
                             {
                                 "patchline": {
                                     "source": [
-                                        "obj-20",
-                                        1
+                                        "obj-23",
+                                        0
                                     ],
                                     "destination": [
                                         "obj-24",
@@ -3539,10 +3662,49 @@
                                 "patchline": {
                                     "source": [
                                         "obj-24",
-                                        0
+                                        1
                                     ],
                                     "destination": [
                                         "obj-25",
+                                        0
+                                    ],
+                                    "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-23",
+                                        1
+                                    ],
+                                    "destination": [
+                                        "obj-27",
+                                        0
+                                    ],
+                                    "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-27",
+                                        0
+                                    ],
+                                    "destination": [
+                                        "obj-28",
+                                        0
+                                    ],
+                                    "order": 0
+                                }
+                            },
+                            {
+                                "patchline": {
+                                    "source": [
+                                        "obj-16",
+                                        2
+                                    ],
+                                    "destination": [
+                                        "obj-30",
                                         0
                                     ],
                                     "order": 0
@@ -3555,16 +3717,16 @@
                                         1
                                     ],
                                     "destination": [
-                                        "obj-27",
-                                        0
+                                        "obj-30",
+                                        1
                                     ],
-                                    "order": 0
+                                    "order": 1
                                 }
                             },
                             {
                                 "patchline": {
                                     "source": [
-                                        "obj-27",
+                                        "obj-30",
                                         0
                                     ],
                                     "destination": [
@@ -3687,7 +3849,7 @@
                                         130.0,
                                         22.0
                                     ],
-                                    "text": "rate 0 100",
+                                    "text": "rate 1 100",
                                     "outlettype": [
                                         ""
                                     ]
@@ -3720,7 +3882,7 @@
                                         130.0,
                                         22.0
                                     ],
-                                    "text": "postrq 0 -1",
+                                    "text": "postrq 1 -1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -3753,7 +3915,7 @@
                                         130.0,
                                         22.0
                                     ],
-                                    "text": "prelevel 0 1.5",
+                                    "text": "prelevel 1 1.5",
                                     "outlettype": [
                                         ""
                                     ]
@@ -3786,7 +3948,7 @@
                                         130.0,
                                         22.0
                                     ],
-                                    "text": "loopstart 0 -1",
+                                    "text": "loopstart 1 -1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -3804,7 +3966,7 @@
                                         260.0,
                                         21.0
                                     ],
-                                    "text": "positions are 0 or more"
+                                    "text": "positions are 0 ms or more"
                                 }
                             },
                             {
@@ -3819,7 +3981,7 @@
                                         130.0,
                                         22.0
                                     ],
-                                    "text": "recpreslew 0 -1",
+                                    "text": "recpreslew 1 -1",
                                     "outlettype": [
                                         ""
                                     ]
@@ -3837,7 +3999,7 @@
                                         260.0,
                                         21.0
                                     ],
-                                    "text": "times and slews are 0 or more"
+                                    "text": "times and slews are 0 ms or more"
                                 }
                             },
                             {
@@ -3878,7 +4040,7 @@
                                     "id": "obj-15",
                                     "maxclass": "newobj",
                                     "numinlets": 1,
-                                    "numoutlets": 2,
+                                    "numoutlets": 3,
                                     "patching_rect": [
                                         15.0,
                                         278.0,
@@ -3887,6 +4049,7 @@
                                     ],
                                     "text": "softkut~ skh_limits",
                                     "outlettype": [
+                                        "signal",
                                         "signal",
                                         ""
                                     ]

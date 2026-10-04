@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Sync outlets: each voice's play head as a signal, in ms of buffer material, wrapped to the buffer's length, like `groove~`'s sync outlet. `softkut~` has one sync outlet per voice after the audio outlets; `mc.softkut~` has a second multichannel outlet. Use `snapshot~` to drive a `waveform~` cursor. softcut is patched (`// softkut patch` in `Voice::processBlockMono`) to write the head position for every sample; before, it published one value per block. The help's view now takes its play head from this signal instead of `phase` messages.
+
 - Any `buffer~` now works, as with `groove~`. Buffers of any length are used whole (softcut needed a power of two, so only the largest power-of-two prefix was used, e.g. 131072 of 196608 frames). Multichannel buffers are accepted: each voice reads and writes one channel, voice *v* defaulting to channel *v* mod the channel count, and `set`/`voicebuf` take an optional 1-based channel. The buffer's own sample rate is respected: rate 1 plays at recorded speed and times are seconds of buffer material. softcut is patched (`// softkut patch` in `SubHead`) to wrap indices by modulo, with a fast path for in-range indices, and to read one channel of an interleaved store. No measurable cost: 95 ns per voice-sample before and after on the engine benchmark. The engine's `process()` now takes one `BufferView` per voice.
 
 - karma~-style per-voice metadata report: sending `poll` now emits one `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list per voice on the message outlet (both `softkut~` and `mc.softkut~`). `pos` is normalized to the loop window (0..1); `state` is synthesized from the play/rec
@@ -15,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   has no state machine. Backed by the engine's `getVoiceInfo`/`VoiceInfo`, which caches the (otherwise write-only) loop bounds. Covered by `test_voice_info`.
 
 ### Fixed
+
+- `phase` reports and `info`'s play head stay inside the buffer. With a loop point past the buffer's end, softcut wraps its read index but its head position runs on, so a 0.5 s buffer with a 2 s loop reported positions up to 2 s and a `waveform~` cursor left the display. Reported positions are now wrapped to the buffer length.
 
 - A `buffer~` that shrinks while a voice records is no longer written past its end. softcut indexes the buffer with its write index before wrapping it, so a write index beyond the new length wrote out of bounds; it is now re-wrapped when the length changes.
 
@@ -45,6 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Signal vectors larger than 8192 samples are split into 8192-sample chunks instead of clamped. The engine's scratch buffers and feedback store hold one chunk, so a clamped pass left every output sample past 8192 unwritten (stale audio). Splitting keeps the feedback bus one chunk delayed rather than one vector delayed; no other host-visible behavior changes.
 
 ### Changed
+
+- **Breaking:** messages and reports use Max's conventions. Voices, inlets and channels count from 1, and every time is in ms: `loopstart`, `loopend`, `position`, `fade`, `recoffset`, the slews, `quant`, `phaseoffset` and the `sync` offset. `phase` reports ms; `info` gains a ninth field, the play head in ms. Clamp warnings show message units. The engine keeps seconds and 0-based voices; `source/include/softkut_units.h` is the one conversion, covered by the offline tests.
 
 - `help/softkut~.maxhelp` is rewritten as six tabs: basic looping, multichannel buffers, buffer sample rate, record/overdub, position reports, and value limits. Each tab shows the voice with the new `patchers/softkut.view.maxpat` bpatcher (arguments: buffer~, channel, voice): the `buffer~` waveform with a moving play head, the loop window, and the voice state, driven by `phase` reports and `poll`. The channels tab plays `media/softkut-stereo.wav` (bells left, bass right). The help and the view are generated with py2max (`make maxhelp`, `scripts/make_help.py`); the generator fails on overlapping boxes or out-of-range cords. The view's logic is laid out with OGDF's Sugiyama layout (`py2max[graph]`), one seeded run so the file is identical on every build. `scripts/make_media.py` writes the stereo file.
 

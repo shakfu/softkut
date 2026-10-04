@@ -44,7 +44,7 @@ Under this direction the norns rows are candidates for removal, not maintenance.
 
 **M1. `buffer~` contract (highest priority).** **Status: done** (any length, channel select, buffer sample rate; see `CHANGELOG.md`). `groove~`, `play~` and `poke~` accept any length, any channel count with a channel selector, and the buffer's own sample rate. softkut~ requires power-of-two length (D2), mono only, and ignores `buffer_getsamplerate`. Meeting the Max contract needs patches to the vendored `SubHead`: an arbitrary-length wrap in `wrapBufIndex`, and a channel stride in `peek`/`poke`. These two patches turn softcut-lib into a Max-shaped engine. Everything else in this list is shell work.
 
-**M2. Signal sync outlet.** Max loopers expose the playhead as a signal (`groove~` sync outlet, 0..1 over the loop). It is sample-accurate, drives `waveform~` through `snapshot~`, and costs no scheduler time. It replaces `@report`, `phase` messages and C5. softcut computes phase per sample but publishes it once per block (`Voice::updateQuantPhase`), so a per-sample outlet needs a small `Voice` patch that writes phase into a caller buffer.
+**M2. Signal sync outlet.** **Status: done** (sync outlets on both externals; see `CHANGELOG.md`). Max loopers expose the playhead as a signal (`groove~` sync outlet, 0..1 over the loop). It is sample-accurate, drives `waveform~` through `snapshot~`, and costs no scheduler time. It replaces `@report`, `phase` messages and C5. softcut computes phase per sample but publishes it once per block (`Voice::updateQuantPhase`), so a per-sample outlet needs a small `Voice` patch that writes phase into a caller buffer.
 
 **M3. Parameters as attributes.** Attributes save with the patcher, show in the inspector, work with `pattr`, and answer `getattr`. They also make D7 and most of C7 go away. Two shapes:
 
@@ -54,7 +54,7 @@ Under this direction the norns rows are candidates for removal, not maintenance.
 
 Recommend option 1. Voices are independent in softcut-lib, so splitting costs only `syncVoice`. Keep `sync` inside `mc.softkut~`, or drive `position` from another object's sync outlet. The discrete 6-inlet `softkut~` disappears; multi-voice use goes through MC.
 
-**M4. Units and indexing.** Milliseconds for times (`groove~`, `play~`, `karma~`). 1-based voices and channels (`buffer~` channels, `poly~`, MC). The engine stays in seconds and 0-based; the shell converts. This resolves D5 and D8.
+**M4. Units and indexing.** **Status: done** (ms and voices from 1 in messages; engine unchanged). Milliseconds for times (`groove~`, `play~`, `karma~`). 1-based voices and channels (`buffer~` channels, `poly~`, MC). The engine stays in seconds and 0-based; the shell converts. This resolves D5 and D8.
 
 **M5. Signal-rate control.** `groove~` takes rate as a signal. softcut smooths rate per sample but its setters are per block. Options: sub-block chunking (16-32 samples), or a `Voice` patch that accepts a rate buffer. `processBlockMono` builds a `std::function` on every call (`Voice.cpp:60`), so very small chunks are costly. Start with rate only.
 
@@ -203,6 +203,8 @@ Fix: skip a ramp whose target and current value are both 0. Size `kMaxBlock` sto
 
 ### D5. Units are inconsistent (medium)
 
+**Status: fixed** by M4.
+
 - Inputs: seconds (`loopstart`, `fade`, `position`).
 
 - `phase` report: seconds.
@@ -226,6 +228,8 @@ These are norns defaults. The README states none of them in the message tables. 
 All per-voice parameters are messages, so nothing is saved with the patcher, shown in the inspector, or readable back. Options: a `dump` message that emits current values, or per-voice list attributes. `dump` is the smaller change.
 
 ### D8. Indexing conventions (low)
+
+**Status: fixed** by M4.
 
 Voices and `inlevel` inlet indices are 0-based. Max's MC objects number channels from 1 (e.g. `mc.target`), as do softcut's Lua bindings. 0-based is defensible (it matches softcut's OSC API) but should be stated in the first line of the help patch.
 

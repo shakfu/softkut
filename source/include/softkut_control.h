@@ -18,6 +18,7 @@
 #include "ext_buffer.h"
 
 #include "softkut_engine.h"
+#include "softkut_units.h"
 
 namespace softkut {
 
@@ -76,35 +77,41 @@ inline void initCommandSymbols() {
         if (!t[i].sym) t[i].sym = gensym(t[i].name);
 }
 
+// "<voice> <value>": voice counted from 1 -> engine index; value as given
 inline int parseVoiceVal(t_object *owner, t_symbol *s, long argc, t_atom *argv,
                          int numVoices, long *v, double *val) {
     if (argc < 2) {
         object_error(owner, "%s: expected <voice> <value>", s->s_name);
         return 0;
     }
-    long voice = atom_getlong(argv);
-    if (voice < 0 || voice >= numVoices) {
-        object_error(owner, "%s: voice %ld out of range [0..%d]", s->s_name, voice, numVoices - 1);
+    const long user = atom_getlong(argv);
+    const int  idx  = toIndex(user, numVoices);
+    if (idx < 0) {
+        object_error(owner, "%s: voice %ld out of range [1..%d]", s->s_name, user, numVoices);
         return 0;
     }
-    *v = voice; *val = atom_getfloat(argv + 1);
+    *v = idx; *val = atom_getfloat(argv + 1);
     return 1;
 }
 
-// Report what the engine will do with a value: reject it, or clamp it. The
-// engine re-applies the same check on the audio thread; this only informs.
-inline bool checkValue(t_object *owner, const char *name, CmdId id, float *v, double sr) {
-    const float in = *v;
-    switch (sanitize(id, *v, sr)) {
+// Convert a message value to engine units and report what the engine will do
+// with it: reject it, or clamp it (the warning shows message units). The engine
+// re-applies the same check on the audio thread; this only informs.
+inline bool checkValue(t_object *owner, const char *name, CmdId id, double user,
+                       double sr, float *engine) {
+    float v = toEngine(id, user);
+    switch (sanitize(id, v, sr)) {
         case Check::Rejected:
             object_error(owner, "%s: value is not a finite number", name);
             return false;
         case Check::Clamped:
-            object_warn(owner, "%s: %g out of range, clamped to %g", name, in, *v);
-            return true;
+            object_warn(owner, "%s: %g out of range, clamped to %g", name, user, toUser(id, v));
+            break;
         default:
-            return true;
+            break;
     }
+    *engine = v;
+    return true;
 }
 
 // ---- templated message handlers (engine-only) --------------------------
@@ -115,8 +122,8 @@ void dispatchCmd(Eng *engine, t_object *owner, t_symbol *s, long argc, t_atom *a
     int n; CmdEntry *t = commandTable(&n);
     for (int i = 0; i < n; ++i) {
         if (s == t[i].sym) {
-            float f = (float)val;
-            if (!checkValue(owner, s->s_name, t[i].id, &f, engine->getSampleRate())) return;
+            float f;
+            if (!checkValue(owner, s->s_name, t[i].id, val, engine->getSampleRate(), &f)) return;
             Command c{t[i].id, (int16_t)v, 0, f};
             if (!engine->push(c)) object_warn(owner, "%s: command queue full, dropped", s->s_name);
             return;
@@ -125,26 +132,40 @@ void dispatchCmd(Eng *engine, t_object *owner, t_symbol *s, long argc, t_atom *a
     object_error(owner, "%s: unknown command", s->s_name);
 }
 
+// two indices counted from 1 -> engine indices; errors name `what`
+inline int parsePair(t_object *owner, const char *msg, const char *what, t_atom *argv,
+                     int count, int *a, int *b) {
+    *a = toIndex(atom_getlong(argv), count);
+    *b = toIndex(atom_getlong(argv + 1), count);
+    if (*a < 0 || *b < 0) {
+        object_error(owner, "%s: %s out of range [1..%d]", msg, what, count);
+        return 0;
+    }
+    return 1;
+}
+
 template <class Eng>
 void dispatchSync(Eng *engine, t_object *owner, long argc, t_atom *argv) {
-    if (argc < 3) { object_error(owner, "sync: expected <follow> <lead> <offset>"); return; }
-    long follow = atom_getlong(argv), lead = atom_getlong(argv + 1);
-    int nv = engine->numVoices();
-    if (follow < 0 || follow >= nv || lead < 0 || lead >= nv) {
-        object_error(owner, "sync: voice index out of range [0..%d]", nv - 1); return;
-    }
-    float off = (float)atom_getfloat(argv + 2);
-    if (!checkValue(owner, "sync", CmdId::VoiceSync, &off, engine->getSampleRate())) return;
-    if (!engine->syncVoice((int)follow, (int)lead, off))
+    if (argc < 3) { object_error(owner, "sync: expected <follow> <lead> <offset ms>"); return; }
+    int follow, lead;
+    if (!parsePair(owner, "sync", "voice", argv, engine->numVoices(), &follow, &lead)) return;
+    float off;
+    if (!checkValue(owner, "sync", CmdId::VoiceSync, atom_getfloat(argv + 2),
+                    engine->getSampleRate(), &off)) return;
+    if (!engine->syncVoice(follow, lead, off))
         object_warn(owner, "sync: command queue full, dropped");
 }
 
 template <class Eng>
 void dispatchStop(Eng *engine, t_object *owner, long argc, t_atom *argv) {
     if (argc < 1) { object_error(owner, "stop: expected <voice>"); return; }
-    long v = atom_getlong(argv); int nv = engine->numVoices();
-    if (v < 0 || v >= nv) { object_error(owner, "stop: voice %ld out of range [0..%d]", v, nv - 1); return; }
-    if (!engine->stopVoice((int)v)) object_warn(owner, "stop: command queue full, dropped");
+    const long user = atom_getlong(argv);
+    const int  v    = toIndex(user, engine->numVoices());
+    if (v < 0) {
+        object_error(owner, "stop: voice %ld out of range [1..%d]", user, engine->numVoices());
+        return;
+    }
+    if (!engine->stopVoice(v)) object_warn(owner, "stop: command queue full, dropped");
 }
 
 template <class Eng>
@@ -157,27 +178,64 @@ void dispatchEnable(Eng *engine, t_object *owner, t_symbol *s, long argc, t_atom
 template <class Eng>
 void dispatchFeedback(Eng *engine, t_object *owner, long argc, t_atom *argv) {
     if (argc < 3) { object_error(owner, "feedback: expected <src> <dst> <gain>"); return; }
-    long src = atom_getlong(argv), dst = atom_getlong(argv + 1); int nv = engine->numVoices();
-    if (src < 0 || src >= nv || dst < 0 || dst >= nv) {
-        object_error(owner, "feedback: voice index out of range [0..%d]", nv - 1); return;
-    }
-    float g = (float)atom_getfloat(argv + 2);
-    if (!checkValue(owner, "feedback", CmdId::FbLevel, &g, engine->getSampleRate())) return;
-    if (!engine->setFeedback((int)src, (int)dst, g))
+    int src, dst;
+    if (!parsePair(owner, "feedback", "voice", argv, engine->numVoices(), &src, &dst)) return;
+    float g;
+    if (!checkValue(owner, "feedback", CmdId::FbLevel, atom_getfloat(argv + 2),
+                    engine->getSampleRate(), &g)) return;
+    if (!engine->setFeedback(src, dst, g))
         object_warn(owner, "feedback: command queue full, dropped");
 }
 
 template <class Eng>
 void dispatchInlevel(Eng *engine, t_object *owner, long argc, t_atom *argv) {
     if (argc < 3) { object_error(owner, "inlevel: expected <inlet> <voice> <gain>"); return; }
-    long inl = atom_getlong(argv), dst = atom_getlong(argv + 1); int nv = engine->numVoices();
-    if (inl < 0 || inl >= nv || dst < 0 || dst >= nv) {
-        object_error(owner, "inlevel: index out of range [0..%d]", nv - 1); return;
-    }
-    float g = (float)atom_getfloat(argv + 2);
-    if (!checkValue(owner, "inlevel", CmdId::InLevel, &g, engine->getSampleRate())) return;
-    if (!engine->setInLevel((int)inl, (int)dst, g))
+    int inl, dst;
+    if (!parsePair(owner, "inlevel", "index", argv, engine->numVoices(), &inl, &dst)) return;
+    float g;
+    if (!checkValue(owner, "inlevel", CmdId::InLevel, atom_getfloat(argv + 2),
+                    engine->getSampleRate(), &g)) return;
+    if (!engine->setInLevel(inl, dst, g))
         object_warn(owner, "inlevel: command queue full, dropped");
+}
+
+// ---- reports (report outlet), shared by both shells ---------------------
+// T provides engine, nvoices and reportout. Voices are reported from 1, times
+// in ms of buffer material.
+
+// `poll`: one `info <voice> <pos 0-1> <play> <rec> <startMs> <endMs> <windowMs>
+// <state> <positionMs>` per voice. positionMs is the play head in the buffer.
+template <class T>
+void reportInfo(T *x) {
+    static t_symbol *ps_info = gensym("info");
+    for (int v = 0; v < x->nvoices; ++v) {
+        const VoiceInfo vi = x->engine->getVoiceInfo(v);
+        t_atom a[9];
+        atom_setlong (a + 0, v + 1);
+        atom_setfloat(a + 1, vi.position);
+        atom_setlong (a + 2, vi.play);
+        atom_setlong (a + 3, vi.rec);
+        atom_setfloat(a + 4, vi.startSec * 1000.0);
+        atom_setfloat(a + 5, vi.endSec * 1000.0);
+        atom_setfloat(a + 6, vi.windowSec * 1000.0);
+        atom_setlong (a + 7, vi.state);
+        atom_setfloat(a + 8, vi.bufferSec * 1000.0);
+        outlet_anything(x->reportout, ps_info, 9, a);
+    }
+}
+
+// report clock: `phase <voice> <ms>` for each voice whose phase changed
+template <class T>
+void reportPhase(T *x) {
+    static t_symbol *ps_phase = gensym("phase");
+    for (int v = 0; v < x->nvoices; ++v) {
+        if (x->engine->checkQuantPhaseChanged(v)) {
+            t_atom a[2];
+            atom_setlong (a + 0, v + 1);
+            atom_setfloat(a + 1, x->engine->getQuantPhase(v) * 1000.0);
+            outlet_anything(x->reportout, ps_phase, 2, a);
+        }
+    }
 }
 
 // @report setter, shared by both shells (each has `report` and `tclock`).
@@ -193,6 +251,14 @@ t_max_err reportSet(T *x, void *attr, long argc, t_atom *argv) {
     else
         clock_unset(x->tclock);
     return MAX_ERR_NONE;
+}
+
+// ---- sync outlets ------------------------------------------------------
+// The engine reports the play head in seconds of buffer material; the sync
+// outlets carry milliseconds, the unit of groove~, play~ and waveform~.
+inline void syncToMs(double *const *sync, int nv, long n) {
+    for (int v = 0; v < nv; ++v)
+        for (long i = 0; i < n; ++i) sync[v][i] *= 1000.0;
 }
 
 // ---- buffer~ association ----------------------------------------------
@@ -243,16 +309,17 @@ void setVoiceBuffer(T *x, long argc, t_atom *argv) {
         object_error((t_object *)x, "voicebuf: expected <voice> <buffer~ name> [<channel>]");
         return;
     }
-    const long v = atom_getlong(argv);
-    if (v < 0 || v >= x->nvoices) {
-        object_error((t_object *)x, "voicebuf: voice %ld out of range [0..%ld]", v, x->nvoices - 1);
+    const long user = atom_getlong(argv);
+    const int  v    = toIndex(user, (int)x->nvoices);
+    if (v < 0) {
+        object_error((t_object *)x, "voicebuf: voice %ld out of range [1..%ld]", user, x->nvoices);
         return;
     }
     long chan;
     if (!parseChannel((t_object *)x, "voicebuf", argc - 2, argv + 2, &chan)) return;
     x->vbufname[v] = atom_getsym(argv + 1);
     x->vchan[v] = chan;
-    ensureVbuf(x, (int)v);
+    ensureVbuf(x, v);
     x->chanWarned = false;
 }
 
@@ -278,7 +345,7 @@ void lockBuffers(T *x, int nv, BufferView (&views)[N], BufferLocks<N> &locks) {
         if (chan >= nch) {
             if (!x->chanWarned) {
                 object_warn((t_object *)x, "voice %d: buffer~ %s has no channel %ld",
-                            v, x->vbufname[v]->s_name, chan + 1);
+                            v + 1, x->vbufname[v]->s_name, chan + 1);
                 x->chanWarned = true;
             }
             continue;

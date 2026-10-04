@@ -8,8 +8,9 @@
 //
 // Topology: a runtime voice count set by the second creation argument
 // (channels, default 1, max NumVoices=6). One signal inlet (record input) and
-// one signal outlet (playback) per voice, plus a trailing message outlet for
-// phase/position reports. (No stereo mix outlet -- pan downstream if needed.)
+// one signal outlet (playback) per voice, then one sync outlet per voice (the
+// play head in ms of buffer material), then a message outlet for reports.
+// (No stereo mix outlet -- pan downstream if needed.)
 //
 // Buffer model (zero-copy): each voice reads and writes one channel of the
 // locked samples of a buffer~ of any length, channel count and sample rate
@@ -29,9 +30,9 @@ typedef softkut::Engine<NumVoices> t_engine;
 
 // Outlet order (Max creates outlets right-to-left, so first created = rightmost):
 // the message/report outlet is created FIRST (rightmost, the conventional data-
-// outlet position), then one signal outlet per voice. The message outlet is not
-// part of perform's outs[] array, so the voice outlets are still indexed
-// 0..nvoices-1 there (voiceOuts[v] = outs[v]).
+// outlet position), then the 2 * nvoices signal outlets. The message outlet is
+// not part of perform's outs[] array: outs[v] is voice v's audio and
+// outs[nvoices + v] its sync signal.
 
 typedef struct _softkut {
     t_pxobject     ob;          // MSP object header (must be first)
@@ -49,7 +50,6 @@ typedef struct _softkut {
 } t_softkut;
 
 static t_class  *softkut_class = NULL;
-static t_symbol *ps_phase, *ps_info;
 
 // The control surface (command table + dispatch) lives in softkut_control.h,
 // shared with mc.softkut~. The thunks below forward to it.
@@ -81,25 +81,9 @@ void softkut_reset(t_softkut *x)
         object_warn((t_object *)x, "reset: command queue full, dropped");
 }
 
-// report each voice's karma~-style metadata out the message outlet: one
-// `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list
-// per voice. Positions are converted from seconds to ms here.
+// `poll`: one info list per voice (see softkut::reportInfo)
 void softkut_poll(t_softkut *x)
-{
-    for (int v = 0; v < x->nvoices; ++v) {
-        softkut::VoiceInfo vi = x->engine->getVoiceInfo(v);
-        t_atom a[8];
-        atom_setlong (a + 0, v);
-        atom_setfloat(a + 1, vi.position);
-        atom_setlong (a + 2, vi.play);
-        atom_setlong (a + 3, vi.rec);
-        atom_setfloat(a + 4, vi.startSec * 1000.0);
-        atom_setfloat(a + 5, vi.endSec * 1000.0);
-        atom_setfloat(a + 6, vi.windowSec * 1000.0);
-        atom_setlong (a + 7, vi.state);
-        outlet_anything(x->reportout, ps_info, 8, a);
-    }
-}
+{ softkut::reportInfo(x); }
 
 // ---------------------------------------------------------------------------
 // buffer~ association
@@ -119,15 +103,16 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
                        double **outs, long nouts, long vec, long flags, void *usr)
 {
     const int nv = (int)x->nvoices;
-    double *voiceOuts[NumVoices];
-    for (int v = 0; v < nv; ++v) voiceOuts[v] = outs[v];
+    double *voiceOuts[NumVoices], *syncOuts[NumVoices];
+    for (int v = 0; v < nv; ++v) { voiceOuts[v] = outs[v]; syncOuts[v] = outs[nv + v]; }
     double *mixL = NULL, *mixR = NULL;   // no stereo-mix outlets (pan downstream)
 
     softkut::BufferView            views[NumVoices];
     softkut::BufferLocks<NumVoices> locks;
     softkut::lockBuffers(x, nv, views, locks);
-    x->engine->process(ins, voiceOuts, (int)vec, views, mixL, mixR);
+    x->engine->process(ins, voiceOuts, (int)vec, views, mixL, mixR, syncOuts);
     softkut::releaseBuffers(x, nv, views, locks);
+    softkut::syncToMs(syncOuts, nv, vec);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,14 +121,7 @@ void softkut_perform64(t_softkut *x, t_object *dsp64, double **ins, long nins,
 void softkut_clock(t_softkut *x)
 {
     if (x->report <= 0) return;
-    for (int v = 0; v < x->nvoices; ++v) {
-        if (x->engine->checkQuantPhaseChanged(v)) {
-            t_atom a[2];
-            atom_setlong (a + 0, v);
-            atom_setfloat(a + 1, x->engine->getQuantPhase(v));
-            outlet_anything(x->reportout, ps_phase, 2, a);
-        }
-    }
+    softkut::reportPhase(x);
     if (sys_getdspobjdspstate((t_object *)x))   // this patcher's audio, not global
         clock_delay(x->tclock, x->report);
 }
@@ -183,10 +161,13 @@ t_max_err softkut_notify(t_softkut *x, t_symbol *s, t_symbol *msg, void *sender,
 void softkut_assist(t_softkut *x, void *b, long m, long a, char *s)
 {
     if (m == ASSIST_INLET) {
-        snprintf_zero(s, 256, (a == 0) ? "(signal) Voice 0 record input / messages"
-                                       : "(signal) Voice %ld record input", a);
+        snprintf_zero(s, 256, (a == 0) ? "(signal) Voice 1 record input / messages"
+                                       : "(signal) Voice %ld record input", a + 1);
     } else if (a < x->nvoices) {
-        snprintf_zero(s, 256, "(signal) Voice %ld output", a);
+        snprintf_zero(s, 256, "(signal) Voice %ld output", a + 1);
+    } else if (a < 2 * x->nvoices) {
+        snprintf_zero(s, 256, "(signal) Voice %ld play head (ms in the buffer~)",
+                      a - x->nvoices + 1);
     } else {
         snprintf_zero(s, 256, "(list) phase / info reports");
     }
@@ -207,10 +188,10 @@ void *softkut_new(t_symbol *s, long argc, t_atom *argv)
 
     dsp_setup((t_pxobject *)x, nvoices);            // one record-input inlet per voice
 
-    // message/report outlet first (-> rightmost), then one signal outlet per
-    // voice (these line up with perform's outs[] in voice order).
+    // message/report outlet first (-> rightmost), then the voice and sync
+    // signal outlets (perform's outs[]: voices, then syncs).
     x->reportout = outlet_new(x, NULL);
-    for (int i = 0; i < nvoices; ++i)
+    for (int i = 0; i < 2 * nvoices; ++i)
         outlet_new(x, "signal");
 
     x->engine     = new t_engine();
@@ -275,6 +256,4 @@ extern "C" void ext_main(void *r)
     class_register(CLASS_BOX, c);
     softkut_class = c;
 
-    ps_phase    = gensym("phase");
-    ps_info     = gensym("info");
 }

@@ -1,10 +1,10 @@
 # softkut~
 
-A Max/MSP external wrapping monome's [softcut-lib](https://github.com/monome/softcut-lib) — the real-time audio buffer looping/resampling engine from the [norns](https://monome.org/norns/) sound computer. `softkut~` exposes 6 independent softcut voices that read and write a shared (or per-voice) Max `buffer~`, with sub-sample looping, crossfaded overdub, resampling read/write heads, per-voice input and output multimode filters, per-voice output level, and voice-to-voice plus inlet-to-voice routing matrices.
+A Max/MSP external wrapping monome's [softcut-lib](https://github.com/monome/softcut-lib), the real-time buffer looping and resampling engine from the [norns](https://monome.org/norns/) sound computer. Each softcut voice reads and writes one channel of a Max `buffer~`, with sub-sample looping, crossfaded overdub, resampling read/write heads, input and output multimode filters, and per-voice output level.
 
-The DSP lives in a host-agnostic engine (`source/include/softkut_engine.h`); this Max external is a thin shell over it. Control messages are marshalled to the audio thread through a lock-free command queue, so parameter changes are click-free and thread-safe.
+The DSP lives in a host-agnostic engine (`source/include/softkut_engine.h`); the Max externals are thin shells over it. Control messages reach the audio thread through a lock-free command queue.
 
-The package builds two externals over the same engine: **`softkut~`** (discrete per-voice inlets/outlets, 6 voices) and **`mc.softkut~`** (a multichannel variant with a variable voice count — see [Multichannel variant](#multichannel-variant-mcsoftkut) below). They share an identical message API.
+The package builds two externals over the same engine and message API: **`softkut~`** (discrete per-voice inlets and outlets, 1-6 voices) and **`mc.softkut~`** (multichannel inlets and outlets, 1-16 voices; see [Multichannel variant](#multichannel-variant-mcsoftkut)).
 
 ## Building
 
@@ -19,16 +19,18 @@ make test                                  # build + run the offline engine test
 ## The object
 
 ```
-[softkut~ <buffer~ name> <channels> @report <ms>]
+[softkut~ <buffer~ name> <voices> @report <ms>]
 ```
 
-`<channels>` is the voice count — default **1** (mono), maximum **6** — and sets how many signal inlets and outlets the object has. So `[softkut~ skbuf]` is a one-voice mono looper; `[softkut~ skbuf 4]` has four voices.
+`<voices>` is the voice count, default **1**, maximum **6**. `[softkut~ skbuf]` is a one-voice looper; `[softkut~ skbuf 4]` has four voices.
 
-- **Inlets** (N signals): one record input per voice (voice 0..N-1). Control messages go to the **left inlet**.
+- **Inlets** (one signal per voice): voice *v*'s record input. Control messages go to the **left inlet**.
 
-- **Outlets**: `0..N-1` = per-voice signal outputs · `N` = message outlet (phase/position reports).
+- **Outlets**, left to right: one audio outlet per voice, then one **sync** outlet per voice, then the **report** outlet.
 
-All voices share the `buffer~` named in the first argument (or via `set`). Each voice can instead be pointed at its own `buffer~` with `voicebuf`.
+The sync outlet is the voice's play head as a signal, in ms of buffer material, wrapped to the buffer's length, as with `groove~`'s sync outlet. `[snapshot~ 30]` turns it into numbers for `waveform~`.
+
+All voices share the `buffer~` named in the first argument (or via `set`). Each voice can instead read its own `buffer~` with `voicebuf`.
 
 ### Buffer requirements
 
@@ -36,15 +38,15 @@ Any `buffer~` works, as with `groove~`:
 
 - **Any length.** The whole buffer is used. Loop points past its end wrap to its start.
 
-- **Any channel count.** Each voice reads and writes one channel. By default voice *v* uses channel *v* mod the channel count, so a stereo `buffer~` gives voice 0 the left channel and voice 1 the right. `set` and `voicebuf` take an optional 1-based channel to override this.
+- **Any channel count.** Each voice reads and writes one channel. By default voice 1 uses channel 1, voice 2 channel 2, and so on, wrapping when there are more voices than channels. `set` and `voicebuf` take an optional channel to override this.
 
-- **Its own sample rate.** Rate `1` plays the buffer at its recorded speed, and times are seconds of buffer material, so a 44.1 kHz file loops correctly in a 48 kHz patch.
+- **Its own sample rate.** Rate `1` plays the buffer at its recorded speed, and times are ms of buffer material, so a 44.1 kHz file loops correctly in a 48 kHz patch.
 
-File loading/saving/clearing is handled by Max's `buffer~` itself (`read`, `replace`, `write`, `crop`, `clear`), not by softkut~.
+File loading, saving and clearing are `buffer~`'s job (`read`, `replace`, `write`, `crop`, `clear`).
 
 ## Message API
 
-Most messages address a single voice and take the form `<message> <voice> <value>` where `voice` is `0..5`. Times are in **seconds**, gains/levels are linear amplitudes, flags are `0`/`1`.
+Most messages take `<message> <voice> <value>`. Voices and channels count from **1**. Times are in **ms**, gains and levels are linear amplitudes, flags are `0`/`1`.
 
 Values that would destabilize softcut are clamped with a console warning: `rate` to -64..64, `prerq`/`postrq` to >= 0.01, `reclevel`/`prelevel` to 0..1, times and slews to >= 0, positions to >= 0. Non-finite values are rejected.
 
@@ -52,160 +54,164 @@ Values that would destabilize softcut are clamped with a console warning: `rate`
 
 | Message | Args | Description |
 |---|---|---|
-| `play` | `<voice> <0/1>` | Enable/disable playback (reading) for a voice. |
-| `rec` | `<voice> <0/1>` | Enable/disable recording (writing) for a voice. |
-| `reconce` | `<voice> <0/1>` | Record-once: records a single loop pass then auto-clears the record flag. |
-| `stop` | `<voice>` | Immediately park the voice's heads (silent), distinct from `play 0`. |
-| `position` | `<voice> <sec>` | Jump the play head to a position (seconds within the buffer). |
-| `enable` | `<voice> <0/1>` | Master on/off gate for a voice. When off, the voice is skipped entirely (no audio, no recording, no feedback contribution). Default on. |
+| `play` | `<voice> <0/1>` | Start or stop playback (reading). Playback starts inside the loop. |
+| `rec` | `<voice> <0/1>` | Start or stop recording (writing). |
+| `reconce` | `<voice> <0/1>` | Record one loop pass, then clear the record flag. |
+| `stop` | `<voice>` | Park the voice's heads at once (silent); unlike `play 0`, leaves the flags set. |
+| `position` | `<voice> <ms>` | Jump the play head to a position in the buffer. |
+| `enable` | `<voice> <0/1>` | Gate a voice. Off skips it entirely: no audio, no recording, no feedback. Default on. |
 
 ### Loop and rate
 
 | Message | Args | Description |
 |---|---|---|
-| `rate` | `<voice> <ratio>` | Playback/record rate. `1` = normal, `0.5` = half speed/octave down, `2` = double, negative = reverse. |
-| `loopstart` | `<voice> <sec>` | Loop start point (seconds). |
-| `loopend` | `<voice> <sec>` | Loop end point (seconds). |
-| `loop` | `<voice> <0/1>` | Loop flag. `0` = one-shot (stops at loop end), `1` = loop. |
-| `fade` | `<voice> <sec>` | Loop/record crossfade time (seconds). |
+| `rate` | `<voice> <ratio>` | `1` = recorded speed, `0.5` = octave down, `2` = octave up, negative = reverse. |
+| `loopstart` | `<voice> <ms>` | Loop start. |
+| `loopend` | `<voice> <ms>` | Loop end. |
+| `loop` | `<voice> <0/1>` | `0` = one-shot (stops at the loop end), `1` = loop. |
+| `fade` | `<voice> <ms>` | Loop and record crossfade time. |
 
 ### Recording level and overdub
 
 | Message | Args | Description |
 |---|---|---|
-| `reclevel` | `<voice> <amp>` | Record amplitude — how much of the input is written. |
-| `prelevel` | `<voice> <amp>` | Preserve level of existing buffer content. `0` = overwrite, `1` = full overdub (sum on top), in between = decaying overdub. |
-| `recoffset` | `<voice> <sec>` | Offset of the record head relative to the play head (seconds; default ≈ -8 samples). |
+| `reclevel` | `<voice> <amp>` | How much of the input is written. |
+| `prelevel` | `<voice> <amp>` | How much existing content is kept: `0` overwrites, `1` sums on top, between decays. |
+| `recoffset` | `<voice> <ms>` | Record head offset from the play head (default -8 samples). |
 
-### Input filter (pre-filter, multimode SVF applied to the record input)
+### Input filter (multimode SVF on the record input)
 
 | Message | Args | Description |
 |---|---|---|
 | `prefc` | `<voice> <Hz>` | Cutoff frequency. |
-| `prerq` | `<voice> <rq>` | Reciprocal Q (resonance; smaller = more resonant). |
-| `prelp` `prehp` `prebp` `prebr` | `<voice> <mix>` | Low-pass / high-pass / band-pass / band-reject mix amounts. |
+| `prerq` | `<voice> <rq>` | Reciprocal Q (smaller = more resonant). |
+| `prelp` `prehp` `prebp` `prebr` | `<voice> <mix>` | Low-pass, high-pass, band-pass, band-reject mix. |
 | `predry` | `<voice> <amp>` | Dry (unfiltered) input mix. |
-| `prefcmod` | `<voice> <amt>` | How much the cutoff tracks playback rate. |
+| `prefcmod` | `<voice> <amt>` | How much the cutoff tracks the rate. |
 
-### Output filter (post-filter, multimode SVF applied to playback)
+### Output filter (multimode SVF on playback)
 
 | Message | Args | Description |
 |---|---|---|
 | `postfc` | `<voice> <Hz>` | Cutoff frequency. |
-| `postrq` | `<voice> <rq>` | Reciprocal Q (resonance). |
-| `postlp` `posthp` `postbp` `postbr` | `<voice> <mix>` | Low-pass / high-pass / band-pass / band-reject mix amounts. |
+| `postrq` | `<voice> <rq>` | Reciprocal Q. |
+| `postlp` `posthp` `postbp` `postbr` | `<voice> <mix>` | Low-pass, high-pass, band-pass, band-reject mix. |
 | `postdry` | `<voice> <amp>` | Dry (unfiltered) playback mix. |
 
 ### Output level
 
 | Message | Args | Description |
 |---|---|---|
-| `level` | `<voice> <amp>` | Voice output gain. Smoothed. |
-| `levelslew` | `<voice> <sec>` | Smoothing time for `level`. |
+| `level` | `<voice> <amp>` | Voice output gain, smoothed. |
+| `levelslew` | `<voice> <ms>` | Smoothing time for `level`. |
 
-Neither object has a built-in stereo mix outlet — each voice is its own output. `pan`/`panslew` are still accepted (shared command set) but have **no effect**; do stereo placement downstream by routing the voice outputs to L/R yourself, or by panning an `mc.softkut~` bundle with `mc.*~` objects.
+Neither object has a stereo mix outlet. `pan` and `panslew` are accepted but do nothing; place voices in stereo downstream.
 
-### Slew (parameter smoothing inside softcut)
-
-| Message | Args | Description |
-|---|---|---|
-| `recpreslew` | `<voice> <sec>` | Smoothing time for record/pre levels. |
-| `rateslew` | `<voice> <sec>` | Smoothing time for rate changes. |
-
-### Phase / sync
+### Slew (smoothing inside softcut)
 
 | Message | Args | Description |
 |---|---|---|
-| `quant` | `<voice> <unit>` | Quantization unit for the reported phase. |
-| `phaseoffset` | `<voice> <sec>` | Offset applied to the reported phase (seconds). |
-| `sync` | `<follow> <lead> <offset>` | Snap voice `follow` to voice `lead`'s position plus `offset` (seconds). |
-| `poll` | — | Emit each voice's current play position out the report outlet as `position <p0> <p1> ... <p5>`. |
+| `recpreslew` | `<voice> <ms>` | Smoothing time for record and pre levels. |
+| `rateslew` | `<voice> <ms>` | Smoothing time for rate changes. |
 
-With `@report <ms>` set to a non-zero interval, the report outlet also automatically emits `phase <voice> <quantphase>` whenever a voice's quantized phase changes.
+### Phase, sync and reports
+
+| Message | Args | Description |
+|---|---|---|
+| `quant` | `<voice> <ms>` | Report `phase` in steps of this size (`0` = unquantized). |
+| `phaseoffset` | `<voice> <ms>` | Offset added to the reported `phase`. softcut applies it only when `quant` > 0. |
+| `sync` | `<follow> <lead> <offset ms>` | Jump voice `follow` to voice `lead`'s position plus `offset`. |
+| `poll` | none | Send one `info` list per voice out the report outlet. |
+
+The report outlet sends:
+
+- `phase <voice> <ms>`: every `@report` ms while the patcher's audio is on, for each voice whose position changed. The position in the buffer, wrapped to its length.
+
+- `info <voice> <pos> <play> <rec> <start> <end> <window> <state> <position>`: on `poll`. `pos` is 0-1 within the loop window; `start`, `end`, `window` and `position` are ms; `state` is 0 stopped, 1 playing, 2 recording, 3 overdub.
 
 ### Buffer association
 
 | Message | Args | Description |
 |---|---|---|
-| `set` | `<buffer~ name> [<channel>]` | Point **all** voices at the named `buffer~`. With a channel (1-based), every voice uses it; without, voice *v* uses channel *v* mod the channel count. |
-| `voicebuf` | `<voice> <buffer~ name> [<channel>]` | Point **one** voice at its own `buffer~` and optional channel (overrides `set`). |
+| `set` | `<buffer~ name> [<channel>]` | All voices read the named `buffer~`. With a channel, every voice uses it; without, voice *v* uses channel *v*, wrapping. |
+| `voicebuf` | `<voice> <buffer~ name> [<channel>]` | One voice reads its own `buffer~` and channel (overrides `set`). |
 
 ### Routing matrices
 
 | Message | Args | Description |
 |---|---|---|
-| `inlevel` | `<inlet> <voice> <gain>` | Route signal `inlet` (0..5) into `voice`'s record input at `gain`. Defaults to identity (inlet *v* -> voice *v* at unity); the off-diagonal lets one input feed several voices. |
-| `feedback` | `<src> <dst> <gain>` | Route voice `src`'s *pre-`level`* output into voice `dst`'s record input at `gain` (one block delayed). `level` is an output gain only, so changing it does not alter a feedback network (this matches softcut/norns). Enables overdub/looping networks; self-feedback (`src == dst`) is allowed — mind stability. |
-
-A voice's record input is therefore: `sum over inlets ( inlet * inlevel[inlet][voice] ) + sum over src ( rawVoiceOutput[src] * feedback[src][voice] )`, where `rawVoiceOutput` is the voice's softcut output before `level` and `pan` are applied.
+| `inlevel` | `<inlet> <voice> <gain>` | Route signal `inlet` into `voice`'s record input. Default identity (inlet *v* -> voice *v* at unity). |
+| `feedback` | `<src> <dst> <gain>` | Route voice `src`'s output (before `level`) into voice `dst`'s record input, one block delayed. Self-feedback is allowed. |
 
 ### Global
 
 | Message | Args | Description |
 |---|---|---|
-| `reset` | — | Re-initialize: stop every voice and restore every default (rate 1, 0-1 s loop, looping on, level 1, no feedback, identity input routing). The next `play` starts from the loop start. The `buffer~` assignment and `@report` are kept. |
+| `reset` | none | Stop every voice and restore every default (rate 1, 0-1000 ms loop, looping on, level 1, no feedback, identity input routing). The next `play` starts from the loop start. The `buffer~` assignment and `@report` are kept. |
 
 ### Attributes
 
 | Attribute | Description |
 |---|---|
-| `@report <ms>` | Phase-report interval in milliseconds (`0` = off, the default). |
+| `@report <ms>` | `phase` report interval (`0` = off, the default). Takes effect at once. |
 
 ## Examples
 
-**Basic loop** — record 2 seconds into a buffer, then loop it:
+**Basic loop**: record 2 s into a buffer, then loop it.
 
 ```
 [buffer~ skbuf 2000]
 [softkut~ skbuf]
 
-set skbuf
-loopstart 0 0   ,  loopend 0 2   ,  loop 0 1
-rec 0 1  ,  play 0 1              (record while monitoring)
+loopend 1 2000, rec 1 1, play 1 1     (record while monitoring)
 ... after 2 s ...
-rec 0 0                           (stop recording, keep looping)
+rec 1 0                               (stop recording, keep looping)
 ```
 
-**Stereo** — two voices on one stereo `buffer~`; voice 0 uses the left channel and voice 1 the right. Route outlet 0 to the left output and outlet 1 to the right:
+**Stereo**: two voices on one stereo `buffer~`. Voice 1 reads the left channel, voice 2 the right; outlets 1 and 2 are their audio.
 
 ```
 [buffer~ skbuf 2000 2]
-[softkut~ skbuf 2]                 (2 voices -> outlets 0 and 1)
+[softkut~ skbuf 2]
 ```
 
-**Feedback overdub** — feed voice 0 into voice 1 to build layers:
+**Feedback overdub**: feed voice 1 into voice 2 to build layers.
 
 ```
-feedback 0 1 0.8     (voice 0 raw output -> voice 1 record at 0.8)
+feedback 1 2 0.8
 ```
 
 ## Viewing a voice
 
-`patchers/softkut.view.maxpat` shows one voice: the `buffer~` channel it reads, a moving play head, its loop window and its state. Use it in a `bpatcher` (patcher file `softkut.view.maxpat`, 520 x 180) with three arguments: the `buffer~` name, the channel (from 1) and the voice (from 0), e.g. `skbuf 1 0`. Connect `softkut~`'s right outlet to its inlet and its outlet back to `softkut~`'s left inlet. On load it sends `report 30`, then `poll` every 100 ms.
+`patchers/softkut.view.maxpat` shows one voice: the `buffer~` channel it reads, a moving play head, its loop window and its state. Use it in a `bpatcher` (patcher file `softkut.view.maxpat`, 520 x 180) with three arguments: the `buffer~` name, the channel and the voice, e.g. `skbuf 1 1`. Connect `softkut~`'s report outlet to its left inlet, the voice's sync outlet to its right inlet, and its outlet back to `softkut~`'s left inlet. It polls `info` every 100 ms.
 
 ## Multichannel variant: `mc.softkut~`
 
-`mc.softkut~` is the MC (multichannel) build of the same engine — instead of discrete per-voice inlets/outlets it uses Max's multichannel signals:
+`mc.softkut~` presents the same engine through Max's multichannel signals:
 
 ```
 [mc.softkut~ <buffer~ name> <voices>]    e.g. [mc.softkut~ skbuf 8]
 ```
 
-- **Inlet** (1): a multichannel record input — channel *v* feeds voice *v*'s record input (`Z_MC_INLETS`, so a single mono cord or an N-channel cord both work). Control messages go here.
+- **Inlet**: a multichannel record input; channel *v* feeds voice *v*. A mono cord or an N-channel cord both work. Control messages go here.
 
-- **Outlet 0**: multichannel voice outputs, one channel per voice (`mc.unpack~ <voices>` to split).
+- **Outlet 1**: the voices' audio, one channel per voice (`mc.unpack~` to split).
 
-- **Outlet 1**: message outlet (phase/position reports).
+- **Outlet 2**: the voices' sync signals, one channel per voice.
 
-The **voice count is a creation argument** (default 6, capped at 16) and becomes the channel count of outlet 0. Everything else — the entire message API above, including the `inlevel` matrix (whose "inlet" index is now the input channel index) — is identical, since both objects share the same engine. There is no built-in stereo mix on `mc.softkut~`: the per-voice `level` still applies to the bundle, but stereo placement is left to downstream `mc.*~` objects (so `pan`/`panslew` have no audible effect here). Drop the voice bundle straight into `mc.*~` chains, or pan/sum it as you like.
+- **Outlet 3**: reports.
+
+The voice count (default 6, maximum 16) is the channel count of both signal outlets. The message API is identical; `inlevel`'s inlet index is the input channel.
 
 ## Project layout
 
 - `source/include/softkut_engine.h` — host-agnostic engine (voices, command queue, level/pan, routing matrices, buffer framing, runtime voice count). No Max dependency.
 
-- `source/include/softkut_control.h` — shared control-message table + dispatch (used by both shells).
+- `source/include/softkut_control.h` — shared control-message table, dispatch and reports (used by both shells).
 
-- `source/projects/softkut_tilde/softkut~.cpp` — discrete Max shell (6 voices).
+- `source/include/softkut_units.h` — message units: ms and voices from 1 in messages, seconds and 0-based in the engine.
+
+- `source/projects/softkut_tilde/softkut~.cpp` — discrete Max shell (1-6 voices).
 
 - `source/projects/mc.softkut_tilde/mc.softkut~.cpp` — multichannel shell (variable voices).
 

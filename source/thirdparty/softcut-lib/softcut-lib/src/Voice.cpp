@@ -56,7 +56,7 @@ void Voice::reset() {
     sch.init(&fadeCurves);
 }
 
-void Voice:: processBlockMono(const float *in, float *out, int numFrames) {
+void Voice:: processBlockMono(const float *in, float *out, int numFrames, phase_t *phaseOut) {
     std::function<void(sample_t, sample_t*)> sampleFunc;
     if(playFlag) {
         if(recFlag) {
@@ -91,6 +91,7 @@ void Voice:: processBlockMono(const float *in, float *out, int numFrames) {
         sampleFunc(x, &y);
 	    out[i] = svfPost.getNextSample(y) + y*svfPostDryLevel;
         updateQuantPhase();
+        if (phaseOut) phaseOut[i] = sch.getActivePhase();   // softkut patch
     }
 
     
