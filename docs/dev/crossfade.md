@@ -33,15 +33,18 @@ Note: `Voice::init(FadeCurves*)` is declared in `Voice.h` but has **no definitio
 Mark all edits with a clear comment (e.g. `// softkut~ patch: expose fade curves`) so the local divergence from upstream is obvious and greppable.
 
 1. **`softcut-lib/include/softcut/Voice.h`** — add public forwarders (the methods are Voice members so they reach the private `fadeCurves`; `FadeCurves.h` is already included):
+
    ```cpp
    void setRecFadeShape(FadeCurves::Shape s) { fadeCurves.setRecShape(s); }
    void setPreFadeShape(FadeCurves::Shape s) { fadeCurves.setPreShape(s); }
    void setRecFadeDelay(float ratio)         { fadeCurves.setRecDelayRatio(ratio); }
    void setPreFadeWindow(float ratio)        { fadeCurves.setPreWindowRatio(ratio); }
    ```
+
    (min-frames setters optional; default 0 is fine for a first cut.)
 
 2. **`softcut-lib/include/softcut/Softcut.h`** — per-voice pass-throughs:
+
    ```cpp
    void setRecFadeShape(int v, FadeCurves::Shape s) { scv[v].setRecFadeShape(s); }
    void setPreFadeShape(int v, FadeCurves::Shape s) { scv[v].setPreFadeShape(s); }
@@ -92,4 +95,3 @@ Mark all edits with a clear comment (e.g. `// softkut~ patch: expose fade curves
 ### Rough scope
 
 Small-to-medium: ~4 forwarders in softcut, ~4 pass-throughs, ~4 engine commands + persistence, ~4 Max handlers with symbol parsing + clamping, ~3 tests, doc updates. The investigation (this note) is the hard part; the implementation is mechanical and follows the existing `feedback`/`inlevel` patterns.
-

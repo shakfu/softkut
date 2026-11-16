@@ -65,18 +65,27 @@ Recommend option 1. Voices are independent in softcut-lib, so splitting costs on
 ### Effect on existing findings
 
 - C1, C2, C4, C6: unchanged.
+
 - C3: fix in the engine. A Max user expects `groove~` behavior: playback starts inside the loop.
+
 - C5: obsolete if M2 replaces the report clock.
+
 - C7: mostly obsolete with M3 (attributes are last-value state).
+
 - D1: extend to removing `feedback`, `inlevel`, and probably `level`. D4 then disappears.
+
 - D2: becomes M1, required.
+
 - D3: smaller after M3 option 1. Each shell becomes a thin wrapper over a one-voice engine.
+
 - D5, D8: resolved by M4. D6: resolved by M6.
 
 ### Risks of this direction
 
 - Vendored fork. M1, M2, M5 and M6 each patch softcut-lib. Upstream fixes then need manual merging. `Svf.cpp` is already patched. Tag every patch with a greppable comment and list them in `docs/dev/`. I have not checked upstream's recent activity.
+
 - Breaking change. Message shapes, units and indexing all change. At version 0.1.0 with no known users, this is the cheapest time to do it.
+
 - What remains of the port is the `Voice`: heads, crossfades, resampler, SVFs, rec/pre slews. That is the part of softcut worth porting; the rest becomes Max plumbing.
 
 ## 1. Correctness

@@ -8,7 +8,7 @@ The package builds two externals over the same engine and message API: **`softku
 
 ## Building
 
-```
+```text
 git submodule update --init --recursive   # max-sdk-base (softcut-lib is vendored)
 make build                                 # configure + build (universal mac binary)
 make test                                  # build + run the offline engine test harness
@@ -18,7 +18,7 @@ make test                                  # build + run the offline engine test
 
 ## The object
 
-```
+```text
 [softkut~ <buffer~ name> <voices> @report <ms>]
 ```
 
@@ -159,7 +159,7 @@ The report outlet sends:
 
 **Basic loop**: record 2 s into a buffer, then loop it.
 
-```
+```text
 [buffer~ skbuf 2000]
 [softkut~ skbuf]
 
@@ -170,14 +170,14 @@ rec 1 0                               (stop recording, keep looping)
 
 **Stereo**: two voices on one stereo `buffer~`. Voice 1 reads the left channel, voice 2 the right; outlets 1 and 2 are their audio.
 
-```
+```text
 [buffer~ skbuf 2000 2]
 [softkut~ skbuf 2]
 ```
 
 **Feedback overdub**: feed voice 1 into voice 2 to build layers.
 
-```
+```text
 feedback 1 2 0.8
 ```
 
@@ -189,7 +189,7 @@ feedback 1 2 0.8
 
 `mc.softkut~` presents the same engine through Max's multichannel signals:
 
-```
+```text
 [mc.softkut~ <buffer~ name> <voices>]    e.g. [mc.softkut~ skbuf 8]
 ```
 

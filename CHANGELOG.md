@@ -12,9 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Any `buffer~` now works, as with `groove~`. Buffers of any length are used whole (softcut needed a power of two, so only the largest power-of-two prefix was used, e.g. 131072 of 196608 frames). Multichannel buffers are accepted: each voice reads and writes one channel, voice *v* defaulting to channel *v* mod the channel count, and `set`/`voicebuf` take an optional 1-based channel. The buffer's own sample rate is respected: rate 1 plays at recorded speed and times are seconds of buffer material. softcut is patched (`// softkut patch` in `SubHead`) to wrap indices by modulo, with a fast path for in-range indices, and to read one channel of an interleaved store. No measurable cost: 95 ns per voice-sample before and after on the engine benchmark. The engine's `process()` now takes one `BufferView` per voice.
 
-- karma~-style per-voice metadata report: sending `poll` now emits one `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list per voice on the message outlet (both `softkut~` and `mc.softkut~`). `pos` is normalized to the loop window (0..1); `state` is synthesized from the play/rec
-  flags as `(rec<<1)|play` (0=stop, 1=play, 2=record, 3=overdub), since softcut
-  has no state machine. Backed by the engine's `getVoiceInfo`/`VoiceInfo`, which caches the (otherwise write-only) loop bounds. Covered by `test_voice_info`.
+- karma~-style per-voice metadata report: sending `poll` now emits one `info <voice> <pos> <play> <rec> <startMs> <endMs> <windowMs> <state>` list per voice on the message outlet (both `softkut~` and `mc.softkut~`). `pos` is normalized to the loop window (0..1); `state` is synthesized from the play/rec flags as `(rec<<1)|play` (0=stop, 1=play, 2=record, 3=overdub), since softcut has no state machine. Backed by the engine's `getVoiceInfo`/`VoiceInfo`, which caches the (otherwise write-only) loop bounds. Covered by `test_voice_info`.
 
 ### Fixed
 
@@ -38,9 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `dsp64` no longer modifies state that the audio thread is reading. Max can recompile a running chain, and `dsp64` reset every voice's sample rate, cleared the 384 KiB-1 MiB feedback store, and (in `mc.softkut~`) freed the silent-input buffer the previous perform routine still used. `setSampleRate` now records the rate and `process()` applies it on the audio thread before draining commands. A null input pointer now means silence, so `mc.softkut~` no longer needs that buffer.
 
-- `poll` no longer races with the audio thread. `Voice::playFlag`/`recFlag` are plain bools that the DSP thread clears when a record-once pass finishes, so reading them from the control thread was undefined behavior. The engine now publishes one 64-bit snapshot per voice from the audio thread at the end of
-  every processed chunk -- transport code (`rec<<1|play`) in the high half,
-  loop-normalized position in the low half -- and `getVoiceInfo` unpacks both from a single load, so an `info` report cannot pair one block's state with another block's position. `test_poll_during_record_once` exercises the path; ThreadSanitizer reports the old read path and is clean on the new one.
+- `poll` no longer races with the audio thread. `Voice::playFlag`/`recFlag` are plain bools that the DSP thread clears when a record-once pass finishes, so reading them from the control thread was undefined behavior. The engine now publishes one 64-bit snapshot per voice from the audio thread at the end of every processed chunk -- transport code (`rec<<1|play`) in the high half, loop-normalized position in the low half -- and `getVoiceInfo` unpacks both from a single load, so an `info` report cannot pair one block's state with another block's position. `test_poll_during_record_once` exercises the path; ThreadSanitizer reports the old read path and is clean on the new one.
 
 - The report clock no longer outlives the engine. Both externals freed the engine before the `@report` clock, and the clock callback reads the engine from the scheduler thread, so deleting an object with reports armed could dereference freed memory under Overdrive. The clock is now freed first.
 
@@ -136,4 +132,4 @@ Initial implementation: a Max/MSP wrapper around monome's softcut-lib, plus a mu
 
 - Fade-curve shaping is the one softcut-lib capability not yet exposed (locked behind `Voice`'s private state); investigated and deferred — see `TODO.md`.
 
-[Unreleased]: https://github.com/shakfu/softkut/compare/v0.1.0...HEAD [0.1.0]: https://github.com/shakfu/softkut
+[Unreleased]: <https://github.com/shakfu/softkut/compare/v0.1.0...HEAD> [0.1.0]: <https://github.com/shakfu/softkut>
