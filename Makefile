@@ -7,7 +7,7 @@ MAX_VERSIONS := 8 9
 # print a section header from a recipe: $(call section,"text")
 section = @echo "==> "$(1)
 
-.PHONY: all build test clean setup update-submodules link maxhelp
+.PHONY: all build test clean setup update-submodules link maxhelp maxref
 
 all: build
 
@@ -23,6 +23,10 @@ test: build
 # regenerate help/softkut~.maxhelp (py2max, via uv)
 maxhelp:
 	@uv run python scripts/make_help.py
+
+# regenerate docs/softkut~.maxref and docs/mc.softkut~.maxref
+maxref:
+	@uv run python scripts/make_maxref.py
 
 clean:
 	@rm -rf externals build

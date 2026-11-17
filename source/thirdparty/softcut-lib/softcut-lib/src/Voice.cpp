@@ -56,7 +56,8 @@ void Voice::reset() {
     sch.init(&fadeCurves);
 }
 
-void Voice:: processBlockMono(const float *in, float *out, int numFrames, phase_t *phaseOut) {
+void Voice:: processBlockMono(const float *in, float *out, int numFrames, phase_t *phaseOut,
+                              const float *rateIn) {
     std::function<void(sample_t, sample_t*)> sampleFunc;
     if(playFlag) {
         if(recFlag) {
@@ -82,9 +83,12 @@ void Voice:: processBlockMono(const float *in, float *out, int numFrames, phase_
         }
     }
 
-    float x, y;
+    // softkut patch: y was uninitialized, and processSampleNoRead (rec without
+    // play) never writes it, so a recording voice output garbage
+    float x, y = 0.f;
     for(int i=0; i<numFrames; ++i) {
         x = svfPre.getNextSample(in[i]) + in[i]*svfPreDryLevel;
+        if (rateIn) rateRamp.setTarget(rateIn[i]);   // softkut patch: signal rate
         sch.setRate(rateRamp.update());
         sch.setPre(preRamp.update());
         sch.setRec(recRamp.update());
@@ -96,6 +100,8 @@ void Voice:: processBlockMono(const float *in, float *out, int numFrames, phase_
 
     
     rawPhase.store(sch.getActivePhase(), std::memory_order_relaxed);
+    // softkut patch: setRate() is bypassed, so track the pre-filter cutoff once per block
+    if (rateIn) updatePreSvfFc();
 
     if(recFlag) {
         if (sch.getRecOnceDone()) {

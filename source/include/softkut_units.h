@@ -12,20 +12,16 @@
 
 namespace softkut {
 
-// commands whose value is a time (ms in messages, seconds in the engine)
+// commands whose value is a time (ms in messages, seconds in the engine).
+// RecOffset is in frames in both.
 inline bool isTime(CmdId id) {
     switch (id) {
         case CmdId::LoopStart:
         case CmdId::LoopEnd:
         case CmdId::FadeTime:
         case CmdId::Position:
-        case CmdId::RecOffset:
         case CmdId::RecPreSlewTime:
         case CmdId::RateSlewTime:
-        case CmdId::LevelSlewTime:
-        case CmdId::PanSlewTime:
-        case CmdId::PhaseQuant:
-        case CmdId::PhaseOffset:
         case CmdId::VoiceSync:
             return true;
         default:

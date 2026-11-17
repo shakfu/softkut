@@ -1,6 +1,6 @@
 # M3 design: one voice per object, parameters as attributes
 
-Date: 2026-11-17. Branch: `dev`. Status: draft, not implemented.
+Date: 2026-11-17. Branch: `dev`. Status: implemented for both objects, with the M6 attributes, help, README and maxrefs. Unverified in Max (`docs/dev/manual-tests.md`, sections 7 and 8).
 
 Context: `docs/dev/usability-review.md` (A1, A2, O1) and `REVIEW.md` M3, M5, M6. Decided 2026-11-17: discrete one-voice `softkut~`; no sample-exact cross-voice alignment needed; `rate` becomes a signal inlet in the same change.
 
@@ -51,9 +51,9 @@ Ranges are the clamps in `sanitize()` (`softkut_engine.h`) unless marked new. "m
 | `prelevel` | float | amp | 0..1 | 0 | | |
 | `recpreslew` | float | ms | >= 0 | 1 | | |
 | `recoffset` | long | samples | +/-2^30 | -8 | unit (ms) | Samples of buffer material (decision 1). |
-| `recshape` | enum | | `linear`, `sine`, `raised` | `linear` | yes (`raised`) | M6. `raised` inverts polarity. Needs the `FadeCurves` patch (`TODO.md`). |
+| `recshape` | enum | | `linear`, `sine`, `raised` | `linear` | yes (`raised`) | M6. `raised` inverts polarity. |
 | `preshape` | enum | | `linear`, `sine`, `raised` | `linear` | | M6. See the upstream bug below. |
-| `softclip` | long | 0/1 | | 0 | yes (always on) | M6. Needs a runtime switch for `SubHead.cpp:119`. |
+| `softclip` | long | 0/1 | | 0 | yes (always on) | M6. With it off, stored samples are bounded to +/-32 instead. |
 
 ### Input filter (record path)
 
@@ -85,7 +85,7 @@ Ranges are the clamps in `sanitize()` (`softkut_engine.h`) unless marked new. "m
 | `position` | `<ms>` | Crossfaded cut. |
 | `stop` | none | `play 0, rec 0` as one command (decision 2). |
 | `reset` | none | Restores every attribute default. Keeps `buffer`, `channel`. |
-| `poll` | none | One `info <play> <rec> <state> <ms>` on outlet 3. The loop bounds move to `getattr`. |
+| `poll` | none | One `info <play> <rec> <state> <position> <start> <end>` on outlet 3, times in ms. `start` and `end` are the loop played: `getattr loopend` returns the stored `0`, not the buffer's end. |
 
 ## Removed
 
@@ -101,7 +101,30 @@ Ranges are the clamps in `sanitize()` (`softkut_engine.h`) unless marked new. "m
 | `@report`, `phase`, `quant`, `phaseoffset` | sync outlet into `snapshot~`, then `round` or `+` (decision 3) |
 | `stop`'s park behaviour (heads parked, flags kept) | none; no use case found (decision 2) |
 
-`mc.softkut~` is out of scope here. Its shape (array attributes, `setvalue`) is a separate decision.
+`mc.softkut~` follows the same model; see the next section.
+
+## mc.softkut~ (2026-11-17)
+
+`[mc.softkut~ <buffer~> @chans N @attr values ...]`: N voices (1-16, default 1) in one engine. Voice v is channel v of every signal port.
+
+| Port | Content |
+|-|-|
+| Inlet 1 | Record inputs (MC), messages. A voice past the connected channel count records silence. |
+| Inlet 2 | Rates (MC), one channel per voice; a voice past the channel count uses `@rate`. A float sets `@rate` for every voice. |
+| Outlet 1 | Audio (MC). |
+| Outlet 2 | Play heads (MC), per `@syncmode`. |
+| Outlet 3 | Dumpout: `info <voice> <play> <rec> <state> <position> <start> <end>` per voice, `getattr` replies. |
+
+- **Array attributes.** Every `softkut~` parameter is an array of N values. One value sets every voice; a list sets voices in order; extra values are ignored with a warning. `getattr` returns N values.
+- **`setvalue <voice> <name> <args>`** addresses one voice: any parameter, `channel`, `play`, `rec`, `position`, `reconce` or `stop`. The object implements it; whether Max also routes `setvalue` for native MC objects is unverified.
+- **Transport.** `play`, `rec` and `position` take one value for every voice or a list; `reconce`, `stop` and `reset` act on every voice.
+- **`@channel`** is per voice; 0 (the default) means channel v, wrapping, so a stereo `buffer~` plays as voices 1 and 2 with no setup.
+- **`@chans`** is read at creation only: it sizes the signal outlets. Changing it later posts an error. Alternative not taken: re-negotiating output channels at run time, whose SDK mechanism I could not confirm.
+- **`sync <follow> <lead> [<offset ms>]`** stays: voices in one engine can be cut sample-exactly, which separate objects cannot.
+- **`feedback <src> <dst> <gain> ...`** stays (restored 2026-11-17): a saved attribute holding the nonzero routes. In Max the same network needs `mc.matrix~` and an `mc.send~`/`mc.receive~` loop, at the same one-vector latency. Idle routes are skipped, so only routes in use cost ramp updates.
+- **Removed**, as for `softkut~`: the voice argument on messages, the positional voice count, `voicebuf`, `level`, `pan`, their slews, `inlevel`, `enable`, `@report`, `phase`, `quant`, `phaseoffset`.
+
+Unverified SDK assumptions, listed in `docs/dev/manual-tests.md` section 8: `getnuminputchannels` returns each inlet's channel count ([SDK MC chapter](https://sdk.cdn.cycling74.com/max-sdk-8.2.0/chapter_mc.html)); `ins[]` lists inlet 1's channels before inlet 2's; `count[i]` reports whether inlet i is connected.
 
 ## Signal-rate `rate` (M5)
 
@@ -114,7 +137,7 @@ Ranges are the clamps in `sanitize()` (`softkut_engine.h`) unless marked new. "m
 
 ## Upstream bug found while drafting
 
-`FadeCurves::calcPreFade` (`FadeCurves.cpp:103`) tests `recShape == Raised` in the pre-curve branch, then asserts `preShape == Raised`. With `preshape raised` and `recshape linear`, no branch matches; the function returns early and the previous pre curve stays in `preFadeBuf`. Fix in the vendored copy before exposing `preshape`.
+`FadeCurves::calcPreFade` (`FadeCurves.cpp:103`) tests `recShape == Raised` in the pre-curve branch, then asserts `preShape == Raised`. With `preshape raised` and `recshape linear`, no branch matches; the function returns early and the previous pre curve stays in `preFadeBuf`. Fixed in the vendored copy.
 
 ## Decisions (2026-11-17)
 

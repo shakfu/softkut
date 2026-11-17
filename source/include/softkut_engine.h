@@ -2,9 +2,10 @@
 //
 // This header owns everything that does NOT depend on Max: the softcut voice
 // array, a lock-free single-producer/single-consumer command queue, the
-// double<->float block conversion, buffer-rate scaling, and the phase-poll
-// bookkeeping. The Max external (softkut~.cpp) is a
-// thin shell over this; the offline test harness drives this directly.
+// double<->float block conversion, buffer-rate scaling, the rate and sync
+// signals, and the transport snapshot read by `poll`. The Max externals
+// (softkut~, mc.softkut~) are thin shells over it; the offline test harness
+// drives it directly.
 //
 // Threading model (mirrors softcut's own Commands design):
 //   - Control threads enqueue commands via the set*/push helpers. Max delivers
@@ -49,10 +50,9 @@ enum class CmdId : uint16_t {
     PreFilterBp, PreFilterBr, PreFilterDry,
     PostFilterFc, PostFilterRq, PostFilterLp, PostFilterHp,
     PostFilterBp, PostFilterBr, PostFilterDry,
-    Level, Pan, LevelSlewTime, PanSlewTime,
     RecPreSlewTime, RateSlewTime,
-    PhaseQuant, PhaseOffset, VoiceSync,
-    Stop, FbLevel, Enable, InLevel,
+    VoiceSync, Stop, FbLevel,
+    RecShape, PreShape, SoftClip,
     Reset
 };
 
@@ -91,15 +91,16 @@ inline Check sanitize(CmdId id, float &v, double sr)
         case CmdId::LoopStart:
         case CmdId::LoopEnd:
         case CmdId::Position:       lo = 0.f; hi = maxSec; break;
-        case CmdId::RecOffset:
         case CmdId::VoiceSync:      lo = -maxSec; hi = maxSec; break;
+        case CmdId::RecOffset:      lo = static_cast<float>(-kMaxFrames);   // frames
+                                    hi = static_cast<float>(kMaxFrames); break;
         case CmdId::RecLevel:
         case CmdId::PreLevel:       lo = 0.f; hi = 1.f; break;
+        case CmdId::RecShape:
+        case CmdId::PreShape:       lo = 0.f; hi = 2.f; break;   // FadeCurves::Shape
         case CmdId::PreFilterRq:
         case CmdId::PostFilterRq:   lo = kMinRq; break;
         case CmdId::FadeTime:
-        case CmdId::LevelSlewTime:
-        case CmdId::PanSlewTime:
         case CmdId::RecPreSlewTime:
         case CmdId::RateSlewTime:   lo = 0.f; break;
         default: break;
@@ -191,25 +192,27 @@ class Engine {
 public:
     static const int   kMaxBlock = 8192;     // upper bound on host vector size
     static const size_t kQueueCap = 1024;
-    static constexpr float kHalfPi = 1.57079632679489662f;
 
     Engine() : numVoices_(NumVoices) {
         for (int v = 0; v < NumVoices; ++v) {
-            lastQuant_[v] = -1.0;             // force first report
             pubSnap_[v].store(0, std::memory_order_relaxed);
             wrote_[v].store(false, std::memory_order_relaxed);
             bufRate_[v] = 0.0;
             lastSync_[v] = 0.0;
             bufLen_[v].store(0.0, std::memory_order_relaxed);
             scale_[v].store(1.0f, std::memory_order_relaxed);
+            syncPhase_[v].store(false, std::memory_order_relaxed);
+            rateSig_[v] = false;
+            lastRate_[v] = 1.0f;
+            boundFrames_[v] = 0;
         }
         setDefaults();
-        zeroOutStore();
+        clearFeedbackStore();
     }
 
     // NumVoices is the compile-time maximum (array sizing); the active voice
     // count is a runtime value in [1, NumVoices]. Only active voices are
-    // processed; outputs/feedback/input-routing all bound to it.
+    // processed.
     int  numVoices() const { return numVoices_; }
     int  maxVoices() const { return NumVoices; }
     void setNumVoices(int n) {
@@ -244,7 +247,8 @@ public:
     bool setPlayFlag(int v, bool b)      { return cmd(CmdId::PlayFlag, v, b ? 1.f : 0.f); }
     bool setRecOnceFlag(int v, bool b)   { return cmd(CmdId::RecOnceFlag, v, b ? 1.f : 0.f); }
     bool cutToPos(int v, float s)        { return cmd(CmdId::Position, v, s); }
-    bool setRecOffset(int v, float d)    { return cmd(CmdId::RecOffset, v, d); }
+    // record head offset from the play head, in frames of buffer material
+    bool setRecOffset(int v, float frames) { return cmd(CmdId::RecOffset, v, frames); }
 
     bool setPreFilterFc(int v, float x)    { return cmd(CmdId::PreFilterFc, v, x); }
     bool setPreFilterFcMod(int v, float x) { return cmd(CmdId::PreFilterFcMod, v, x); }
@@ -264,50 +268,52 @@ public:
     bool setPostFilterDry(int v, float x)  { return cmd(CmdId::PostFilterDry, v, x); }
 
     bool setRecPreSlewTime(int v, float s) { return cmd(CmdId::RecPreSlewTime, v, s); }
+    // fade shapes: 0 linear, 1 sine, 2 raised (softcut's record default, which
+    // inverts polarity); soft clip: softcut's 1.2x clipper on the write path
+    bool setRecShape(int v, int shape)     { return cmd(CmdId::RecShape, v, (float)shape); }
+    bool setPreShape(int v, int shape)     { return cmd(CmdId::PreShape, v, (float)shape); }
+    bool setSoftClip(int v, bool on)       { return cmd(CmdId::SoftClip, v, on ? 1.f : 0.f); }
     bool setRateSlewTime(int v, float s)   { return cmd(CmdId::RateSlewTime, v, s); }
-
-    // output mix: per-voice level (voice gain) and pan (-1 left .. +1 right)
-    bool setLevel(int v, float a)          { return cmd(CmdId::Level, v, a); }
-    bool setPan(int v, float p)            { return cmd(CmdId::Pan, v, p); }
-    bool setLevelSlewTime(int v, float s)  { return cmd(CmdId::LevelSlewTime, v, s); }
-    bool setPanSlewTime(int v, float s)    { return cmd(CmdId::PanSlewTime, v, s); }
-
-    bool setPhaseQuant(int v, float x)     { return cmd(CmdId::PhaseQuant, v, x); }
-    bool setPhaseOffset(int v, float s)    { return cmd(CmdId::PhaseOffset, v, s); }
 
     bool syncVoice(int follow, int lead, float offset) {
         return push(Command{CmdId::VoiceSync, (int16_t)follow, (int16_t)lead, offset});
     }
+    // play 0 and rec 0 as one command, so both apply in the same block
     bool stopVoice(int v) { return cmd(CmdId::Stop, v, 0.f); }
-    bool setEnabled(int v, bool b) { return cmd(CmdId::Enable, v, b ? 1.f : 0.f); }
-    // route voice `src`'s output into voice `dst`'s record input at gain `g`
+    // Sync output: false = head in seconds of buffer material, true = 0-1
+    // across the loop. Read by the audio thread each block; no queue needed.
+    void setSyncPhase(int v, bool b) { syncPhase_[v].store(b, std::memory_order_relaxed); }
+    // route voice `src`'s output into voice `dst`'s record input at gain `g`,
+    // one chunk later (the latency of a send~/receive~ loop in Max)
     bool setFeedback(int src, int dst, float g) {
         return push(Command{CmdId::FbLevel, (int16_t)src, (int16_t)dst, g});
-    }
-    // route input inlet `inl` into voice `dst`'s record input at gain `g`
-    bool setInLevel(int inl, int dst, float g) {
-        return push(Command{CmdId::InLevel, (int16_t)inl, (int16_t)dst, g});
     }
     bool reset() { return push(Command{CmdId::Reset, 0, 0, 0.f}); }
 
     // ---- consumer side: drain queue + process one block ----------------
-    // ins/voiceOuts: NumVoices arrays of `nframes` host samples (double). A null
-    //   ins[v] is silence. Each voiceOuts[v] receives that voice's post-level
-    //   (pre-pan) signal.
+    // ins/voiceOuts: one array of `nframes` host samples (double) per voice:
+    //   voice v records ins[v], plus any feedback routes into it, and plays
+    //   into voiceOuts[v]. A null ins[v] is silence.
     // bufs: one BufferView per voice. A null `bufs`, or a view with null
     //   samples or zero frames, makes that voice silent.
-    // mixL/mixR: the equal-power panned sum of all voices (may be null to skip).
     // syncOuts: optional, one array per voice (entries may be null): the play
     //   head for every sample, in seconds of buffer material, wrapped to the
-    //   buffer's length. A voice with no buffer, or disabled, holds its last value.
+    //   buffer's length (or 0-1 across the loop, see setSyncPhase). A voice with
+    //   no buffer holds its last value.
+    // rateIns: optional, one array per voice (entries may be null): the rate
+    //   for every sample, in place of setRate(). Clamped to +/-kMaxRate; a
+    //   non-finite sample repeats the previous one.
     // A host vector longer than kMaxBlock is split into kMaxBlock chunks rather
     // than clamped: the scratch buffers and the feedback store hold one chunk,
     // so a clamped pass left every output sample past kMaxBlock unwritten.
     void process(const double *const *ins, double *const *voiceOuts, int nframes,
-                 const BufferView *bufs, double *mixL, double *mixR,
-                 double *const *syncOuts = nullptr) {
+                 const BufferView *bufs, double *const *syncOuts = nullptr,
+                 const double *const *rateIns = nullptr) {
         if (srPending_.exchange(false, std::memory_order_acquire))
             applySampleRate(requestedSr_.load(std::memory_order_relaxed));
+        // bind the buffers before the drain: a cut computes the write index
+        // from the buffer length, and times scale by the buffer's rate
+        bindBuffers(bufs);
         drain();
 
         for (int v = 0; v < numVoices_; ++v)
@@ -316,17 +322,17 @@ public:
         const double *inSlice[NumVoices];
         double       *outSlice[NumVoices];
         double       *syncSlice[NumVoices];
+        const double *rateSlice[NumVoices];
         for (int off = 0; off < nframes; off += kMaxBlock) {
             const int n = (nframes - off < kMaxBlock) ? (nframes - off) : kMaxBlock;
             for (int v = 0; v < numVoices_; ++v) {
                 inSlice[v]  = ins[v] ? ins[v] + off : nullptr;
                 outSlice[v] = voiceOuts[v] + off;
                 syncSlice[v] = (syncOuts && syncOuts[v]) ? syncOuts[v] + off : nullptr;
+                rateSlice[v] = (rateIns && rateIns[v]) ? rateIns[v] + off : nullptr;
             }
-            processChunk(inSlice, outSlice, syncSlice, n, bufs,
-                         mixL ? mixL + off : nullptr, mixR ? mixR + off : nullptr);
+            processChunk(inSlice, outSlice, syncSlice, rateSlice, n);
         }
-        updatePhases();
     }
 
     // ---- phase / transport poll (safe from any thread) -----------------
@@ -334,15 +340,12 @@ public:
     // each chunk, never from softcut's plain-bool flags.
     // positions in seconds of buffer material (see BufferView::sampleRate)
     // getSavedPosition is the head position softcut steps, which can pass the
-    // buffer's end when a loop point does (reads wrap there). getQuantPhase is
-    // the reported phase, wrapped to the buffer so it marks the frame heard.
+    // buffer's end when a loop point does (reads wrap there).
     double getSavedPosition(int v) { return cut_.getSavedPosition(v) / scale(v); }
-    double getQuantPhase(int v)    { return wrapToBuffer(v, cut_.getQuantPhase(v) / scale(v)); }
     // buffer length (seconds) as of the voice's last processed block; 0 = none
     double getBufferSeconds(int v) const { return bufLen_[v].load(std::memory_order_relaxed); }
     bool   getPlayFlag(int v)      { return (snapState(snap(v)) & 1) != 0; }
     bool   getRecFlag(int v)       { return (snapState(snap(v)) & 2) != 0; }
-    bool   getEnabled(int v)       { return enabled_[v]; }
     // True if voice v wrote to its buffer during the last process() call. A
     // record-once pass clears the record flag inside that same call, so the
     // record flag alone misses the block holding its final writes.
@@ -358,7 +361,7 @@ public:
         const int      st    = snapState(sn);
         const float    pos   = snapPos(sn);
         const float    start = loopStart_[v].load(std::memory_order_relaxed);
-        const float    end   = loopEnd_[v].load(std::memory_order_relaxed);
+        const float    end   = static_cast<float>(loopEndSec(v));
         const float    win   = end - start;
         const float    norm  = win > 1e-9f ? (pos - start) / win : 0.f;
         VoiceInfo info;
@@ -371,14 +374,6 @@ public:
         info.windowSec = end - start;
         info.state     = st;
         return info;
-    }
-
-    // returns true (once) when a voice's quantized phase has changed since the
-    // last call; used to throttle phase reporting to the host.
-    bool checkQuantPhaseChanged(int v) {
-        const softcut::phase_t q = cut_.getQuantPhase(v);
-        if (q != lastQuant_[v]) { lastQuant_[v] = q; return true; }
-        return false;
     }
 
 private:
@@ -419,85 +414,103 @@ private:
 
     // one <= kMaxBlock chunk; the queue is already drained by the caller.
     void processChunk(const double *const *ins, double *const *voiceOuts,
-                      double *const *syncOuts, int nframes,
-                      const BufferView *bufs, double *mixL, double *mixR) {
-        // the equal-power pan mix is only computed when a host actually wants it
-        const bool wantMix = (mixL != nullptr || mixR != nullptr);
-        if (wantMix)
-            for (int i = 0; i < nframes; ++i) { mixLf_[i] = 0.f; mixRf_[i] = 0.f; }
+                      double *const *syncOuts, const double *const *rateIns, int nframes) {
+        for (int v = 0; v < numVoices_; ++v) {
+            const double *in = ins[v];
+            for (int i = 0; i < nframes; ++i) recIn_[i] = in ? static_cast<float>(in[i]) : 0.f;
+            addFeedback(v, nframes);
 
-        // prevOut holds last block's raw voice outputs (feedback source, one
-        // block delayed); curOut receives this block's raw outputs. We read
-        // prevOut for ALL src while writing curOut, so the within-block voice
-        // order doesn't affect the feedback (matches SoftcutClient::mixInput).
-        float (*prevOut)[kMaxBlock] = outStore_[outCur_ ^ 1];
-        float (*curOut)[kMaxBlock]  = outStore_[outCur_];
-
-        for (int dst = 0; dst < numVoices_; ++dst) {
-            // record input = input matrix (inlet -> voice) + voice->voice feedback
-            for (int i = 0; i < nframes; ++i) recIn_[i] = 0.f;
-            for (int inl = 0; inl < numVoices_; ++inl) {
-                const double *in = ins[inl];
-                if (!in) continue;
-                for (int i = 0; i < nframes; ++i)
-                    recIn_[i] += static_cast<float>(in[i]) * inLevel_[inl][dst].update();
-            }
-            for (int src = 0; src < numVoices_; ++src)
-                for (int i = 0; i < nframes; ++i)
-                    recIn_[i] += prevOut[src][i] * fbLevel_[src][dst].update();
-
-            const BufferView *bv  = bufs ? &bufs[dst] : nullptr;
-            float       *buf    = bv ? bv->samples : nullptr;
-            // softcut indexes frames with int: cap far beyond any real buffer~
-            const size_t frames = !buf ? 0 : (bv->frames < (size_t)kMaxFrames
-                                              ? bv->frames : (size_t)kMaxFrames);
-            const bool   active = enabled_[dst] && buf && frames >= 1;
+            const size_t frames = boundFrames_[v];
+            const bool   active = frames >= 1;
             // the record flag only changes at the drain above or at the end of
             // processBlock (record-once completion), so its value here says
             // whether this chunk writes to the buffer.
-            const bool   writing = active && cut_.getRecFlag(dst);
+            const bool   writing = active && cut_.getRecFlag(v);
             if (active) {
-                if (bv->sampleRate != bufRate_[dst]) setBufferRate(dst, bv->sampleRate);
-                const double rate = bv->sampleRate > 0.0 ? bv->sampleRate : sampleRate_;
-                bufLen_[dst].store(static_cast<double>(frames) / rate, std::memory_order_relaxed);
-                cut_.setVoiceBuffer(dst, buf, frames, bv->stride);
-                cut_.processBlock(dst, recIn_, outScratch_, nframes,
-                                  syncOuts[dst] ? phaseScratch_ : nullptr);
-                if (syncOuts[dst]) writeSync(dst, syncOuts[dst], nframes, frames, rate);
+                const double rate = bufRate_[v] > 0.0 ? bufRate_[v] : sampleRate_;
+                const float *rateBuf = fillRate(v, rateIns[v], nframes);
+                cut_.processBlock(v, recIn_, outScratch_, nframes,
+                                  syncOuts[v] ? phaseScratch_ : nullptr, rateBuf);
+                if (syncOuts[v]) writeSync(v, syncOuts[v], nframes, frames, rate);
             } else {
                 for (int i = 0; i < nframes; ++i) outScratch_[i] = 0.f;
-                if (syncOuts[dst])
-                    for (int i = 0; i < nframes; ++i) syncOuts[dst][i] = lastSync_[dst];
+                if (syncOuts[v])
+                    for (int i = 0; i < nframes; ++i) syncOuts[v][i] = lastSync_[v];
             }
-            if (writing) wrote_[dst].store(true, std::memory_order_relaxed);
-            publishSnap(dst);
+            if (writing) wrote_[v].store(true, std::memory_order_relaxed);
+            publishSnap(v);
 
-            // retain raw output for next block's feedback
-            for (int i = 0; i < nframes; ++i) curOut[dst][i] = outScratch_[i];
-
-            // per-voice level (gain), and optional equal-power pan into the mix
-            double *out = voiceOuts[dst];
+            double *out = voiceOuts[v];
+            float  *keep = outStore_[outCur_][v];   // next chunk's feedback source
             for (int i = 0; i < nframes; ++i) {
-                const float lv = outLevel_[dst].update();
-                const float s  = outScratch_[i] * lv;
-                out[i] = static_cast<double>(s);
-                if (wantMix) {
-                    const float pv = outPan_[dst].update();      // [0,1]
-                    mixLf_[i] += s * std::cos(pv * kHalfPi);
-                    mixRf_[i] += s * std::sin(pv * kHalfPi);
-                }
+                out[i]  = static_cast<double>(outScratch_[i]);
+                keep[i] = outScratch_[i];
             }
         }
-        outCur_ ^= 1;   // this block's curOut becomes next block's prevOut
+        outCur_ ^= 1;
+    }
 
-        if (mixL) for (int i = 0; i < nframes; ++i) mixL[i] = static_cast<double>(mixLf_[i]);
-        if (mixR) for (int i = 0; i < nframes; ++i) mixR[i] = static_cast<double>(mixRf_[i]);
+    // Mix the previous chunk's outputs into voice dst's record input. Every
+    // voice reads the previous chunk, so the voice order does not matter. A
+    // route whose gain is 0 and has slewed to 0 is skipped: idle routes cost
+    // nothing, where updating all N^2 ramps cost 512 per sample at 16 voices.
+    void addFeedback(int dst, int nframes) {
+        const float (*prev)[kMaxBlock] = outStore_[outCur_ ^ 1];
+        for (int src = 0; src < numVoices_; ++src) {
+            if (fbTarget_[src][dst] == 0.f && std::fabs(fbLast_[src][dst]) < 1e-6f) continue;
+            softcut::LogRamp &g = fbLevel_[src][dst];
+            float last = 0.f;
+            for (int i = 0; i < nframes; ++i) {
+                last = g.update();
+                recIn_[i] += prev[src][i] * last;
+            }
+            fbLast_[src][dst] = last;
+        }
+    }
+
+    // fresh DSP start or reset: no audio from before re-enters a voice
+    void clearFeedbackStore() {
+        std::memset(outStore_, 0, sizeof outStore_);
+        outCur_ = 0;
+    }
+
+    // Point each voice at its buffer for this process() call. A null `bufs`,
+    // or a view with no samples or frames, leaves the voice unbound (silent).
+    void bindBuffers(const BufferView *bufs) {
+        for (int v = 0; v < numVoices_; ++v) {
+            const BufferView *bv = bufs ? &bufs[v] : nullptr;
+            float *buf = bv ? bv->samples : nullptr;
+            // softcut indexes frames with int: cap far beyond any real buffer~
+            const size_t frames = !buf ? 0 : (bv->frames < (size_t)kMaxFrames
+                                              ? bv->frames : (size_t)kMaxFrames);
+            boundFrames_[v] = frames;
+            if (frames < 1) continue;
+            const double rate = bv->sampleRate > 0.0 ? bv->sampleRate : sampleRate_;
+            const double len  = static_cast<double>(frames) / rate;
+            const bool   resized = len != bufLen_[v].load(std::memory_order_relaxed);
+            bufLen_[v].store(len, std::memory_order_relaxed);
+            // reapplyVoice() reads bufLen_, so store the length first
+            if (bv->sampleRate != bufRate_[v]) setBufferRate(v, bv->sampleRate);
+            else if (resized) applyLoopEnd(v);   // loop end 0 follows the buffer
+            cut_.setVoiceBuffer(v, buf, frames, bv->stride);
+        }
     }
 
     // head phase (buffer frames, per sample) -> seconds of buffer material,
     // wrapped as softcut wraps its read index
     void writeSync(int v, double *sync, int nframes, size_t frames, double rate) {
         const double len = static_cast<double>(frames);
+        if (syncPhase_[v].load(std::memory_order_relaxed)) {
+            // 0-1 across the loop, from the unwrapped head
+            const double start = loopStart_[v].load(std::memory_order_relaxed);
+            const double win   = loopEndSec(v) - start;
+            for (int i = 0; i < nframes; ++i) {
+                const double p = win > 1e-9 ? (phaseScratch_[i] / rate - start) / win : 0.0;
+                sync[i] = p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
+            }
+            lastSync_[v] = sync[nframes - 1];
+            return;
+        }
         for (int i = 0; i < nframes; ++i) {
             double f = phaseScratch_[i];
             if (f < 0.0 || f >= len) {
@@ -507,6 +520,40 @@ private:
             sync[i] = f / rate;
         }
         lastSync_[v] = sync[nframes - 1];
+    }
+
+    // The rate signal for one chunk, scaled to the buffer rate and clamped
+    // (|rate| > 64 overruns softcut's resampler). Null without a signal. When a
+    // signal is removed, the voice returns to the setRate() value.
+    const float *fillRate(int v, const double *in, int nframes) {
+        if (!in) {
+            if (rateSig_[v]) { rateSig_[v] = false; applyRate(v); }
+            return nullptr;
+        }
+        rateSig_[v] = true;
+        const float k = scale(v);
+        float r = lastRate_[v];
+        for (int i = 0; i < nframes; ++i) {
+            const float x = static_cast<float>(in[i]);
+            if (std::isfinite(x)) r = x;
+            float y = r * k;
+            y = y < -kMaxRate ? -kMaxRate : (y > kMaxRate ? kMaxRate : y);
+            rateScratch_[i] = y;
+        }
+        lastRate_[v] = r;
+        return rateScratch_;
+    }
+
+    // loop end in seconds of buffer material; 0 means the buffer's end (once
+    // a buffer has been seen)
+    double loopEndSec(int v) const {
+        const double e = loopEnd_[v].load(std::memory_order_relaxed);
+        if (e > 0.0) return e;
+        const double len = bufLen_[v].load(std::memory_order_relaxed);
+        return len > 0.0 ? len : e;
+    }
+    void applyLoopEnd(int v) {
+        cut_.setLoopEnd(v, scaled(v, CmdId::LoopEnd, static_cast<float>(loopEndSec(v))));
     }
 
     bool cmd(CmdId id, int v, float val) {
@@ -526,18 +573,11 @@ private:
         sampleRate_ = sr;
         cut_.setSampleRate(static_cast<unsigned int>(sr));
         for (int v = 0; v < NumVoices; ++v) {
-            outLevel_[v].setSampleRate(static_cast<float>(sr));
-            outPan_[v].setSampleRate(static_cast<float>(sr));
-            for (int w = 0; w < NumVoices; ++w) {
-                fbLevel_[v][w].setSampleRate(static_cast<float>(sr));
-                inLevel_[v][w].setSampleRate(static_cast<float>(sr));
-            }
-        }
-        for (int v = 0; v < NumVoices; ++v) {
             updateScale(v);
             reapplyVoice(v);
+            for (int w = 0; w < NumVoices; ++w) fbLevel_[v][w].setSampleRate(static_cast<float>(sr));
         }
-        zeroOutStore();   // fresh DSP start: clear the feedback history
+        clearFeedbackStore();
     }
 
     // ---- buffer sample rate ------------------------------------------------
@@ -577,12 +617,16 @@ private:
     void reapplyVoice(int v) {
         applyRate(v);
         cut_.setLoopStart(v, scaled(v, CmdId::LoopStart, loopStart_[v].load(std::memory_order_relaxed)));
-        cut_.setLoopEnd(v, scaled(v, CmdId::LoopEnd, loopEnd_[v].load(std::memory_order_relaxed)));
+        applyLoopEnd(v);
         cut_.setFadeTime(v, scaled(v, CmdId::FadeTime, fadeTime_[v].load(std::memory_order_relaxed)));
-        cut_.setPhaseOffset(v, scaled(v, CmdId::PhaseOffset, phaseOffset_[v].load(std::memory_order_relaxed)));
-        cut_.setPhaseQuant(v, phaseQuant_[v] * scale(v));
-        const float ro = recOffset_[v].load(std::memory_order_relaxed);
-        if (!std::isnan(ro)) cut_.setRecOffset(v, scaled(v, CmdId::RecOffset, ro));
+        applyRecOffset(v);
+    }
+
+    // softcut takes the offset in seconds at the DSP rate and stores frames;
+    // frames of buffer material are the same frames
+    void applyRecOffset(int v) {
+        cut_.setRecOffset(v, recOffset_[v].load(std::memory_order_relaxed)
+                             / static_cast<float>(sampleRate_));
     }
 
     void handle(Command c) {
@@ -592,8 +636,8 @@ private:
             case CmdId::Rate:           rate_[v] = c.value; applyRate(v); break;
             case CmdId::LoopStart:      cut_.setLoopStart(v, scaled(v, c.id, c.value));
                                         loopStart_[v].store(c.value, std::memory_order_relaxed); break;
-            case CmdId::LoopEnd:        cut_.setLoopEnd(v, scaled(v, c.id, c.value));
-                                        loopEnd_[v].store(c.value, std::memory_order_relaxed); break;
+            case CmdId::LoopEnd:        loopEnd_[v].store(c.value, std::memory_order_relaxed);
+                                        applyLoopEnd(v); break;
             case CmdId::LoopFlag:       cut_.setLoopFlag(v, c.value > 0.f); break;
             case CmdId::FadeTime:       cut_.setFadeTime(v, scaled(v, c.id, c.value));
                                         fadeTime_[v].store(c.value, std::memory_order_relaxed); break;
@@ -601,10 +645,12 @@ private:
             case CmdId::PreLevel:       cut_.setPreLevel(v, c.value); break;
             case CmdId::RecFlag:        cut_.setRecFlag(v, c.value > 0.f); break;
             case CmdId::PlayFlag:       cut_.setPlayFlag(v, c.value > 0.f); break;
-            case CmdId::RecOnceFlag:    cut_.setRecOnceFlag(v, c.value > 0.f); break;
+            // record-once writes only while the record flag is set: arm both
+            case CmdId::RecOnceFlag:    cut_.setRecOnceFlag(v, c.value > 0.f);
+                                        if (c.value > 0.f) cut_.setRecFlag(v, true); break;
             case CmdId::Position:       cut_.cutToPos(v, scaled(v, c.id, c.value)); break;
-            case CmdId::RecOffset:      cut_.setRecOffset(v, scaled(v, c.id, c.value));
-                                        recOffset_[v].store(c.value, std::memory_order_relaxed); break;
+            case CmdId::RecOffset:      recOffset_[v].store(c.value, std::memory_order_relaxed);
+                                        applyRecOffset(v); break;
             case CmdId::PreFilterFc:    cut_.setPreFilterFc(v, c.value); break;
             case CmdId::PreFilterFcMod: cut_.setPreFilterFcMod(v, c.value); break;
             case CmdId::PreFilterRq:    cut_.setPreFilterRq(v, c.value); break;
@@ -622,15 +668,6 @@ private:
             case CmdId::PostFilterDry:  cut_.setPostFilterDry(v, c.value); break;
             case CmdId::RecPreSlewTime: cut_.setRecPreSlewTime(v, c.value); break;
             case CmdId::RateSlewTime:   cut_.setRateSlewTime(v, c.value); break;
-            case CmdId::Level:          outLevel_[v].setTarget(c.value); break;
-            // pan arrives as [-1,1]; the ramp/mix work in [0,1]
-            case CmdId::Pan:            outPan_[v].setTarget((c.value + 1.f) * 0.5f); break;
-            case CmdId::LevelSlewTime:  outLevel_[v].setTime(c.value); break;
-            case CmdId::PanSlewTime:    outPan_[v].setTime(c.value); break;
-            case CmdId::PhaseQuant:     phaseQuant_[v] = c.value;
-                                        cut_.setPhaseQuant(v, c.value * scale(v)); break;
-            case CmdId::PhaseOffset:    cut_.setPhaseOffset(v, scaled(v, c.id, c.value));
-                                        phaseOffset_[v].store(c.value, std::memory_order_relaxed); break;
             // softcut's syncVoice adds offsets in DSP seconds; the two voices'
             // stores may run at different rates, so convert through each scale.
             // At drain time the saved position is the lead's current position.
@@ -638,62 +675,54 @@ private:
                 cut_.cutToPos(c.idx0, scaled(c.idx0, CmdId::Position,
                               static_cast<float>(getSavedPosition(c.idx1)) + c.value));
                 break;
-            case CmdId::Stop:           cut_.stopVoice(v); break;
-            case CmdId::Enable:         enabled_[v] = c.value > 0.f; break;
-            case CmdId::FbLevel:        fbLevel_[c.idx0][c.idx1].setTarget(c.value); break;
-            case CmdId::InLevel:        inLevel_[c.idx0][c.idx1].setTarget(c.value); break;
-            // stop every voice and restore all defaults; the feedback history is
-            // cleared too, so no audio from before the reset re-enters a voice
-            case CmdId::Reset:          cut_.reset(); setDefaults(); zeroOutStore(); break;
+            case CmdId::Stop:           cut_.setPlayFlag(v, false);
+                                        cut_.setRecFlag(v, false); break;
+            case CmdId::FbLevel:        fbLevel_[c.idx0][c.idx1].setTarget(c.value);
+                                        fbTarget_[c.idx0][c.idx1] = c.value; break;
+            case CmdId::RecShape:       cut_.setRecFadeShape(v, (int)std::lround(c.value)); break;
+            case CmdId::PreShape:       cut_.setPreFadeShape(v, (int)std::lround(c.value)); break;
+            case CmdId::SoftClip:       cut_.setSoftClip(v, c.value > 0.f); break;
+            // stop every voice and restore all defaults
+            case CmdId::Reset:          cut_.reset(); setDefaults(); clearFeedbackStore(); break;
         }
     }
 
-    // softcut updates per-voice saved/quant phase once per block internally;
-    // nothing to push here, but kept as a hook for future block-rate polling.
-    void updatePhases() {}
-
     // Apply the same per-voice defaults the shell expects after construction or
-    // a reset(): rate 1, a 1s loop, looping on, short fade, clean record path.
+    // a reset(): rate 1, the whole buffer as the loop, looping on, short fade,
+    // and a transparent record path (no input filter, soft clip or inverting
+    // record fade).
     void setDefaults() {
         for (int v = 0; v < NumVoices; ++v) {
             rate_[v] = 1.0f;
             loopStart_[v].store(0.0f, std::memory_order_relaxed);
-            loopEnd_[v].store(1.0f, std::memory_order_relaxed);
+            loopEnd_[v].store(0.0f, std::memory_order_relaxed);   // buffer end
             fadeTime_[v].store(0.01f, std::memory_order_relaxed);
-            // softcut's reset() leaves the phase offset alone, and never
-            // initializes the phase quantum: set both here
-            phaseOffset_[v].store(0.0f, std::memory_order_relaxed);
-            phaseQuant_[v] = 0.0f;
-            // NaN: keep softcut's default of -8 frames (not a seconds value)
-            recOffset_[v].store(std::numeric_limits<float>::quiet_NaN(),
-                                std::memory_order_relaxed);
+            recOffset_[v].store(-8.0f, std::memory_order_relaxed);   // softcut's default
             reapplyVoice(v);
+            // softcut updates a quantized phase every sample but never
+            // initializes its quantum, and reset() leaves the offset: zero both
+            cut_.setPhaseQuant(v, 0.0f);
+            cut_.setPhaseOffset(v, 0.0f);
             cut_.setLoopFlag(v, true);
             cut_.setRecLevel(v, 1.0f);
             cut_.setPreLevel(v, 0.0f);
             cut_.setPlayFlag(v, false);
             cut_.setRecFlag(v, false);
-            outLevel_[v].setTime(0.01f);
-            outLevel_[v].setTarget(1.0f);    // unity voice gain
-            outPan_[v].setTime(0.01f);
-            outPan_[v].setTarget(0.5f);      // centre (0.5 in [0,1])
-            enabled_[v] = true;                   // voices active by default
-            for (int w = 0; w < NumVoices; ++w) {
-                fbLevel_[v][w].setTime(0.01f);
-                fbLevel_[v][w].setTarget(0.0f);   // no feedback by default
-                inLevel_[v][w].setTime(0.01f);
-                // identity input routing: inlet v -> voice v at unity
-                inLevel_[v][w].setTarget(v == w ? 1.0f : 0.0f);
+            // softcut low-passes the record input at 16 kHz by default; a Max
+            // looper should record its input unfiltered
+            cut_.setPreFilterLp(v, 0.0f);
+            cut_.setPreFilterDry(v, 1.0f);
+            // softcut's Raised record fade inverts polarity, and its soft clip
+            // gains the input 1.2x
+            cut_.setRecFadeShape(v, 0);   // linear
+            cut_.setPreFadeShape(v, 0);   // linear, softcut's default
+            cut_.setSoftClip(v, false);
+            for (int w = 0; w < NumVoices; ++w) {   // no feedback routes
+                fbLevel_[v][w] = softcut::LogRamp(static_cast<float>(sampleRate_), 0.01f);
+                fbTarget_[v][w] = 0.f;
+                fbLast_[v][w]   = 0.f;
             }
         }
-    }
-
-    void zeroOutStore() {
-        for (int p = 0; p < 2; ++p)
-            for (int v = 0; v < NumVoices; ++v)
-                for (int i = 0; i < kMaxBlock; ++i)
-                    outStore_[p][v][i] = 0.f;
-        outCur_ = 0;
     }
 
     int                             numVoices_;     // active voice count <= NumVoices
@@ -703,32 +732,30 @@ private:
     double                          sampleRate_ = 48000.0;  // audio thread
     std::atomic<double>             requestedSr_{48000.0};
     std::atomic<bool>               srPending_{false};
-    softcut::phase_t                lastQuant_[NumVoices];
     std::atomic<uint64_t>           pubSnap_[NumVoices];    // state<<32 | position
     std::atomic<bool>               wrote_[NumVoices];      // buffer written last block
     std::atomic<float>              loopStart_[NumVoices];  // cached loop bounds
     std::atomic<float>              loopEnd_[NumVoices];    // (seconds) for reports
-    std::atomic<float>              fadeTime_[NumVoices];   // seconds-valued params,
-    std::atomic<float>              recOffset_[NumVoices];  // re-applied on a
-    std::atomic<float>              phaseOffset_[NumVoices];// sample-rate change
+    std::atomic<float>              fadeTime_[NumVoices];   // re-applied on a
+    std::atomic<float>              recOffset_[NumVoices];  // sample-rate change (frames)
     std::atomic<uint64_t>           handled_{0};
     float                           rate_[NumVoices];       // user rate (audio thread)
-    float                           phaseQuant_[NumVoices]; // user quantum (seconds)
     double                          bufRate_[NumVoices];    // store rate, 0 = DSP rate
     std::atomic<float>              scale_[NumVoices];      // bufRate / DSP rate
     std::atomic<double>             bufLen_[NumVoices];     // buffer length, seconds
-    softcut::LogRamp                outLevel_[NumVoices];
-    softcut::LogRamp                outPan_[NumVoices];
-    softcut::LogRamp                fbLevel_[NumVoices][NumVoices];  // [src][dst]
-    softcut::LogRamp                inLevel_[NumVoices][NumVoices];  // [inlet][voice]
-    bool                            enabled_[NumVoices];
     float                           outScratch_[kMaxBlock];
     softcut::phase_t                phaseScratch_[kMaxBlock];  // per-sample head phase
     double                          lastSync_[NumVoices];      // held while inactive
+    std::atomic<bool>               syncPhase_[NumVoices];     // sync as 0-1 of the loop
+    bool                            rateSig_[NumVoices];       // last chunk had a rate signal
+    size_t                          boundFrames_[NumVoices];   // this call's buffer, 0 = none
+    float                           lastRate_[NumVoices];      // held over non-finite samples
+    float                           rateScratch_[kMaxBlock];
     float                           recIn_[kMaxBlock];
-    float                           mixLf_[kMaxBlock];
-    float                           mixRf_[kMaxBlock];
-    float                           outStore_[2][NumVoices][kMaxBlock]; // feedback history
+    softcut::LogRamp                fbLevel_[NumVoices][NumVoices];  // [src][dst]
+    float                           fbTarget_[NumVoices][NumVoices];
+    float                           fbLast_[NumVoices][NumVoices];   // last ramp output
+    float                           outStore_[2][NumVoices][kMaxBlock]; // outputs, ping-ponged
     int                             outCur_ = 0;
 };
 

@@ -116,15 +116,19 @@ void SubHead::poke(float in, float pre, float rec) {
     for(int i=0; i<nframes; ++i) {
         y = src[i];
 
-#if 1 // soft clipper
-        y = clip_.processSample(y);
-#endif
+        if (clipOn_) y = clip_.processSample(y);   // softkut patch: was #if 1
 #if 0 // lowpass filter
         lpf_.processSample(&y);
 #endif
         sample_t &dst = buf_[static_cast<size_t>(wrIdx_) * stride_];
         dst *= preFade_;
         dst += y * recFade_;
+        // softkut patch: bound what is stored. The soft clip was the only
+        // limit on the write path; without it, feedback grows the buffer to
+        // inf or NaN, which never decays. NaN compares false, so it becomes 0.
+        if (dst > kMaxStored) dst = kMaxStored;
+        else if (dst < -kMaxStored) dst = -kMaxStored;
+        else if (!(dst == dst)) dst = 0.f;
 
         wrIdx_ = wrapBufIndex(wrIdx_ + inc_dir_);
     }

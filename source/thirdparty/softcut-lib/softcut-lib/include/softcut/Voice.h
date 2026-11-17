@@ -41,6 +41,10 @@ namespace softcut {
         void setRecFlag(bool val);
 
         void setRecOnceFlag(bool val);
+        // softkut patch: record and pre fade shapes (FadeCurves::Shape), soft clip
+        void setRecFadeShape(int shape) { fadeCurves.setRecShape(static_cast<FadeCurves::Shape>(shape)); }
+        void setPreFadeShape(int shape) { fadeCurves.setPreShape(static_cast<FadeCurves::Shape>(shape)); }
+        void setSoftClip(bool on) { sch.setSoftClip(on); }
 
         void setPlayFlag(bool val);
 
@@ -78,9 +82,11 @@ namespace softcut {
 
         // process a single channel
         // softkut patch: phaseOut (optional) receives the active head's phase,
-        // in buffer frames, after each sample
+        // in buffer frames, after each sample. rateIn (optional) sets the
+        // rate target for each sample, in place of setRate().
         void processBlockMono(const float *in, float *out, int numFrames,
-                              phase_t *phaseOut = nullptr);
+                              phase_t *phaseOut = nullptr,
+                              const float *rateIn = nullptr);
 
         void setRecOffset(float d);
 

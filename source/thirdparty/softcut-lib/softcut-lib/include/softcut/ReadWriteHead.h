@@ -51,6 +51,8 @@ namespace softcut {
 	void run();
 
         void setRecOffsetSamples(int d);
+        // softkut patch
+        void setSoftClip(bool on) { head[0].setSoftClip(on); head[1].setSoftClip(on); }
 
         phase_t getActivePhase();
         rate_t getRate();

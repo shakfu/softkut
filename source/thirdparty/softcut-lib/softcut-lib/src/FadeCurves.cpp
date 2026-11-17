@@ -100,8 +100,7 @@ void FadeCurves::calcPreFade() {
             buf[i++] = 1.f - x;
             x += phi;
         }
-    } else if (recShape == Raised) {
-        assert(preShape == Raised);
+    } else if (preShape == Raised) {   // softkut patch: tested recShape
         const float phi = fpi / ( static_cast<float>(nwp*2));
         while (i < nwp) {
             buf[i++] = cosf(x);

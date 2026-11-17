@@ -1,0 +1,286 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+<?xml-stylesheet href="./_c74_ref.xsl" type="text/xsl"?>
+
+<c74object name='mc.softkut~' module='msp' category='MSP Sampling'>
+
+	<digest>softcut looper voices as multichannel signals</digest>
+
+	<description>mc.softkut~ is @chans softkut~ voices (1-16) in one object: voice v is channel v of every signal port. Every voice attribute holds one value per voice: one value sets every voice, a list sets them in order, and setvalue addresses one voice. Voices in one object can be aligned sample-exactly with sync.</description>
+
+	<metadatalist>
+		<metadata name='author'>Shakeeb Alireza</metadata>
+		<metadata name='tag'>MSP</metadata>
+		<metadata name='tag'>MSP Sampling</metadata>
+		<metadata name='tag'>softcut</metadata>
+	</metadatalist>
+
+	<inletlist>
+		<inlet id="0" type="multichannel signal">
+			<digest>Record inputs, messages</digest>
+			<description>Channel v is voice v's record input; a voice past the channel count records silence. Takes every message and attribute.</description>
+		</inlet>
+		<inlet id="1" type="multichannel signal/float">
+			<digest>Rates</digest>
+			<description>Channel v sets voice v's rate per sample, in place of @rate; a voice past the channel count uses @rate. A number sets @rate for every voice.</description>
+		</inlet>
+	</inletlist>
+
+	<outletlist>
+		<outlet id="0" type="multichannel signal">
+			<digest>Audio</digest>
+			<description>One channel per voice.</description>
+		</outlet>
+		<outlet id="1" type="multichannel signal">
+			<digest>Play heads</digest>
+			<description>One channel per voice: ms in the buffer~, or 0-1 across the loop with @syncmode phase.</description>
+		</outlet>
+		<outlet id="2" type="list">
+			<digest>info and attribute values</digest>
+			<description>On poll, one "info &lt;voice&gt; &lt;play&gt; &lt;rec&gt; &lt;state&gt; &lt;position&gt; &lt;start&gt; &lt;end&gt;" per voice: state is 0 stopped, 1 playing, 2 recording, 3 overdub; position is the play head; start and end are the loop played, so @loopend 0 reports the buffer~'s end. Times are ms. Also answers getattr messages, such as getrate, with the attribute name and value.</description>
+		</outlet>
+	</outletlist>
+
+	<objarglist>
+		<objarg name="buffer-name" optional="1" type="symbol">
+			<digest>The buffer~</digest>
+			<description>Sets @buffer. Set the voice count with @chans; further plain arguments are ignored with a warning.</description>
+		</objarg>
+	</objarglist>
+
+	<methodlist>
+		<method name="play">
+			<arglist>
+				<arg name="flags" type="list" optional="0" />
+			</arglist>
+			<digest>Start or stop playback</digest>
+			<description>One value for every voice, or one per voice: play 1 0 1 plays voices 1 and 3.</description>
+		</method>
+		<method name="rec">
+			<arglist>
+				<arg name="flags" type="list" optional="0" />
+			</arglist>
+			<digest>Start or stop recording</digest>
+			<description>One value for every voice, or one per voice. A voice past the record input's channel count records silence.</description>
+		</method>
+		<method name="position">
+			<arglist>
+				<arg name="ms" type="list" optional="0" />
+			</arglist>
+			<digest>Jump the play heads</digest>
+			<description>One position in ms for every voice, or one per voice, with a crossfade (@fade).</description>
+		</method>
+		<method name="reconce">
+			<digest>Record one loop pass</digest>
+			<description>Every voice records one pass, from its next loop start or position jump.</description>
+		</method>
+		<method name="stop">
+			<digest>Stop playback and recording</digest>
+			<description>play 0 and rec 0 for every voice.</description>
+		</method>
+		<method name="setvalue">
+			<arglist>
+				<arg name="voice" type="int" optional="0" />
+				<arg name="name" type="symbol" optional="0" />
+				<arg name="value" type="list" optional="1" />
+			</arglist>
+			<digest>Address one voice</digest>
+			<description>Sets one voice's attribute (any voice attribute, or channel), or sends it play, rec, position, reconce or stop. Voices count from 1.</description>
+		</method>
+		<method name="sync">
+			<arglist>
+				<arg name="follow" type="int" optional="0" />
+				<arg name="lead" type="int" optional="0" />
+				<arg name="offset-ms" type="float" optional="1" />
+			</arglist>
+			<digest>Align one voice to another</digest>
+			<description>Jumps voice follow to voice lead's position plus offset ms, sample-exact.</description>
+		</method>
+		<method name="feedback">
+			<arglist>
+				<arg name="src" type="int" optional="0" />
+				<arg name="dst" type="int" optional="0" />
+				<arg name="gain" type="float" optional="0" />
+			</arglist>
+			<digest>Route a voice into another's record input</digest>
+			<description>Sets the gain from voice src's output to voice dst's record input, one signal vector later; repeat the triple to set several routes. Other routes keep their gains; 0 removes a route. Self-feedback is allowed. reset clears every route.</description>
+		</method>
+		<method name="set">
+			<arglist>
+				<arg name="buffer-name" type="symbol" optional="0" />
+				<arg name="channel" type="int" optional="1" />
+			</arglist>
+			<digest>Set the buffer~</digest>
+			<description>Sets @buffer, and @channel for every voice if given.</description>
+		</method>
+		<method name="poll">
+			<digest>Report each voice's state</digest>
+			<description>Sends one info list per voice out the right outlet (see the outlet).</description>
+		</method>
+		<method name="reset">
+			<digest>Restore the defaults</digest>
+			<description>Stops every voice and restores every attribute default. @buffer and @channel are kept.</description>
+		</method>
+		<method name="signal">
+			<digest>Record inputs, or rates</digest>
+			<description>Left inlet: channel v is voice v's record input. Right inlet: channel v is voice v's rate, in place of @rate.</description>
+		</method>
+		<method name="float">
+			<arglist>
+				<arg name="rate" type="float" optional="0" />
+			</arglist>
+			<digest>Set the rate</digest>
+			<description>In the right inlet, sets @rate for every voice. The left inlet takes no numbers.</description>
+		</method>
+		<method name="int">
+			<arglist>
+				<arg name="rate" type="int" optional="0" />
+			</arglist>
+			<digest>Set the rate</digest>
+			<description>In the right inlet, sets @rate for every voice.</description>
+		</method>
+	</methodlist>
+
+	<attributelist>
+		<attribute name='feedback' get='1' set='1' type='atom' size='0' >
+			<digest>Feedback routes</digest>
+			<description>The nonzero routes as src dst gain triples, voices from 1; saved with the patcher. Setting it changes only the routes named (see the feedback message).</description>
+		</attribute>
+		<attribute name='chans' get='1' set='1' type='int' size='1' >
+			<digest>Voice count</digest>
+			<description>Number of voices, 1-16, default 1: the channel count of both signal outlets. Set it in the object box; it cannot change later.</description>
+		</attribute>
+		<attribute name='buffer' get='1' set='1' type='symbol' size='1' >
+			<digest>The buffer~</digest>
+			<description>The buffer~ the voice reads and writes. Also set by the first argument or the set message.</description>
+		</attribute>
+		<attribute name='channel' get='1' set='1' type='int' size='16' >
+			<digest>buffer~ channel per voice</digest>
+			<description>One value per voice, counted from 1. 0 (the default) gives voice v channel v, wrapping, so a stereo buffer~ plays as voices 1 and 2.</description>
+		</attribute>
+		<attribute name='syncmode' get='1' set='1' type='int' size='1' >
+			<digest>Play head output</digest>
+			<description>What the middle outlet carries: ms (0, the default), the play head in ms of the buffer~, wrapped to its length; or phase (1), 0-1 across the loop.</description>
+		</attribute>
+		<attribute name='rate' get='1' set='1' type='float64' size='16' >
+			<digest>Playback and record rate</digest>
+			<description>1 is the buffer~'s recorded speed, 0.5 an octave down, 2 an octave up, negative reverse. Range -64 to 64. Ignored for a voice with a rate channel in the right inlet. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='rateslew' get='1' set='1' type='float64' size='16' >
+			<digest>Rate smoothing (ms)</digest>
+			<description>Smoothing time for rate changes, including the rate signal. Set 0 for audio-rate modulation. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='loopstart' get='1' set='1' type='float64' size='16' >
+			<digest>Loop start (ms)</digest>
+			<description>Loop start in ms of buffer material. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='loopend' get='1' set='1' type='float64' size='16' >
+			<digest>Loop end (ms)</digest>
+			<description>Loop end in ms of buffer material. 0 (the default) is the buffer~'s end, and follows the buffer~ when it is resized. A loop end past the buffer~'s end wraps to its start. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='loop' get='1' set='1' type='int' size='16' >
+			<digest>Loop on/off</digest>
+			<description>1 (the default) loops; 0 plays one-shot and stops at the loop end. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='fade' get='1' set='1' type='float64' size='16' >
+			<digest>Crossfade time (ms)</digest>
+			<description>Crossfade time for the loop wrap and for position jumps. Default 10. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='reclevel' get='1' set='1' type='float64' size='16' >
+			<digest>Record level</digest>
+			<description>How much of the input is written, 0-1. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prelevel' get='1' set='1' type='float64' size='16' >
+			<digest>Pre level</digest>
+			<description>How much existing content is kept on each pass, 0-1: 0 (the default) overwrites, 1 sums on top, between decays. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='recpreslew' get='1' set='1' type='float64' size='16' >
+			<digest>Record and pre level smoothing (ms)</digest>
+			<description>Smoothing time for reclevel and prelevel. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='recoffset' get='1' set='1' type='int' size='16' >
+			<digest>Record head offset (samples)</digest>
+			<description>Offset of the record head from the play head, in samples of buffer material. Default -8. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='recshape' get='1' set='1' type='int' size='16' >
+			<digest>Record fade shape</digest>
+			<description>Curve of the record level during crossfades: linear (0, the default), sine (1) or raised (2). raised is softcut's default and stores the input inverted. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='preshape' get='1' set='1' type='int' size='16' >
+			<digest>Pre fade shape</digest>
+			<description>Curve of the pre level during crossfades: linear (0, the default), sine (1) or raised (2). One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='softclip' get='1' set='1' type='int' size='16' >
+			<digest>Soft clip on/off</digest>
+			<description>1 applies softcut's soft clip to the record input: 1.2x gain below its knee, saturating above. 0 (the default) records the input unchanged. Stored samples are bounded to +/-32 either way. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prefc' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter cutoff (Hz)</digest>
+			<description>Cutoff of the multimode filter on the record input. At least 10 Hz; softcut caps it at 0.4 times the sample rate. Default 16000. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prerq' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter reciprocal Q</digest>
+			<description>Reciprocal Q of the input filter, at least 0.01; smaller is more resonant. Default 4. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prelp' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter low-pass mix</digest>
+			<description>Low-pass output of the input filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prehp' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter high-pass mix</digest>
+			<description>High-pass output of the input filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prebp' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter band-pass mix</digest>
+			<description>Band-pass output of the input filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prebr' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter band-reject mix</digest>
+			<description>Band-reject output of the input filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='predry' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter dry mix</digest>
+			<description>Unfiltered input, 0-1. Default 1: the input is recorded unfiltered. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='prefcmod' get='1' set='1' type='float64' size='16' >
+			<digest>Input filter rate tracking</digest>
+			<description>How far the input filter cutoff follows the rate, 0-1. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postfc' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter cutoff (Hz)</digest>
+			<description>Cutoff of the multimode filter on playback. At least 10 Hz. Default 12000. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postrq' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter reciprocal Q</digest>
+			<description>Reciprocal Q of the output filter, at least 0.01. Default 4. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postlp' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter low-pass mix</digest>
+			<description>Low-pass output of the output filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='posthp' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter high-pass mix</digest>
+			<description>High-pass output of the output filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postbp' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter band-pass mix</digest>
+			<description>Band-pass output of the output filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postbr' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter band-reject mix</digest>
+			<description>Band-reject output of the output filter, 0-1. Default 0. One value per voice; one value sets every voice.</description>
+		</attribute>
+		<attribute name='postdry' get='1' set='1' type='float64' size='16' >
+			<digest>Output filter dry mix</digest>
+			<description>Unfiltered playback, 0-1. Default 1. One value per voice; one value sets every voice.</description>
+		</attribute>
+	</attributelist>
+
+	<seealsolist>
+		<seealso name="softkut~"/>
+		<seealso name="buffer~"/>
+		<seealso name="mc.pack~"/>
+		<seealso name="mc.unpack~"/>
+		<seealso name="mc.dup~"/>
+	</seealsolist>
+
+</c74object>

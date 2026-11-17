@@ -1,16 +1,14 @@
-// softkut_control.h : shared control-message dispatch for the softkut~ shells.
+// softkut_control.h : Max-side helpers shared by softkut~ and mc.softkut~.
 //
-// Both the discrete softkut~ and the multichannel mc.softkut~ present the same
-// control surface (the engine commands). This header holds the single copy of
-// the command table and the message handlers so the two shells can't drift. The
-// handlers are templated on the engine type (softkut~ uses Engine<6>,
-// mc.softkut~ uses Engine<kMaxVoices>) and operate only on the engine + the
-// owning t_object (for error/warning posts). The buffer~ helpers are templated
-// on the shell struct, which must provide vbuf[], vbufname[], vchan[],
-// chanWarned, nvoices and engine. Outlets and perform stay shell-specific.
+// The parameter table (one entry per voice attribute), value checks, the
+// buffer~ helpers and the sync-outlet conversion. The buffer~ helpers are
+// templated on the shell struct, which must provide vbuf[], vbufname[],
+// vchan[], chanWarned, nvoices and engine.
 
 #ifndef SOFTKUT_CONTROL_H
 #define SOFTKUT_CONTROL_H
+
+#include <cmath>
 
 #include "ext.h"
 #include "ext_obex.h"
@@ -22,76 +20,89 @@
 
 namespace softkut {
 
-// "<voice> <value>" control messages -> engine command id.
-struct CmdEntry { const char *name; CmdId id; t_symbol *sym; };
+// ---- voice parameters ----------------------------------------------------
+// Values are in attribute units (ms, Hz, frames, amplitudes); `def` is the
+// default after creation and reset.
+enum ParamKind { kFloat, kLong, kFlag, kShape };
 
-// Single shared table (one instance across all translation units, since this is
-// an inline function with a static local).
-inline CmdEntry *commandTable(int *count) {
-    static CmdEntry cmds[] = {
-        {"rate",        CmdId::Rate,           nullptr},
-        {"loopstart",   CmdId::LoopStart,      nullptr},
-        {"loopend",     CmdId::LoopEnd,        nullptr},
-        {"loop",        CmdId::LoopFlag,       nullptr},
-        {"fade",        CmdId::FadeTime,       nullptr},
-        {"reclevel",    CmdId::RecLevel,       nullptr},
-        {"prelevel",    CmdId::PreLevel,       nullptr},
-        {"rec",         CmdId::RecFlag,        nullptr},
-        {"play",        CmdId::PlayFlag,       nullptr},
-        {"reconce",     CmdId::RecOnceFlag,    nullptr},
-        {"position",    CmdId::Position,       nullptr},
-        {"recoffset",   CmdId::RecOffset,      nullptr},
-        {"prefc",       CmdId::PreFilterFc,    nullptr},
-        {"prefcmod",    CmdId::PreFilterFcMod, nullptr},
-        {"prerq",       CmdId::PreFilterRq,    nullptr},
-        {"prelp",       CmdId::PreFilterLp,    nullptr},
-        {"prehp",       CmdId::PreFilterHp,    nullptr},
-        {"prebp",       CmdId::PreFilterBp,    nullptr},
-        {"prebr",       CmdId::PreFilterBr,    nullptr},
-        {"predry",      CmdId::PreFilterDry,   nullptr},
-        {"postfc",      CmdId::PostFilterFc,   nullptr},
-        {"postrq",      CmdId::PostFilterRq,   nullptr},
-        {"postlp",      CmdId::PostFilterLp,   nullptr},
-        {"posthp",      CmdId::PostFilterHp,   nullptr},
-        {"postbp",      CmdId::PostFilterBp,   nullptr},
-        {"postbr",      CmdId::PostFilterBr,   nullptr},
-        {"postdry",     CmdId::PostFilterDry,  nullptr},
-        {"level",       CmdId::Level,          nullptr},
-        {"pan",         CmdId::Pan,            nullptr},
-        {"levelslew",   CmdId::LevelSlewTime,  nullptr},
-        {"panslew",     CmdId::PanSlewTime,    nullptr},
-        {"recpreslew",  CmdId::RecPreSlewTime, nullptr},
-        {"rateslew",    CmdId::RateSlewTime,   nullptr},
-        {"quant",       CmdId::PhaseQuant,     nullptr},
-        {"phaseoffset", CmdId::PhaseOffset,    nullptr},
+struct Param {
+    const char *name;
+    CmdId       id;
+    ParamKind   kind;
+    double      def;
+    const char *min;        // inspector range, null = none
+    const char *max;
+    const char *category;
+    const char *label;
+};
+
+static const int kNumParams = 28;   // entries in params()
+
+inline const Param *params(int *count) {
+    static const Param p[] = {
+        {"rate",       CmdId::Rate,           kFloat, 1,     "-64", "64", "Loop",   "Rate (ignored while inlet 2 has a signal)"},
+        {"rateslew",   CmdId::RateSlewTime,   kFloat, 1,     "0",   NULL, "Loop",   "Rate slew (ms)"},
+        {"loopstart",  CmdId::LoopStart,      kFloat, 0,     "0",   NULL, "Loop",   "Loop start (ms)"},
+        {"loopend",    CmdId::LoopEnd,        kFloat, 0,     "0",   NULL, "Loop",   "Loop end (ms, 0 = buffer end)"},
+        {"loop",       CmdId::LoopFlag,       kFlag,  1,     NULL,  NULL, "Loop",   "Loop (off = one-shot)"},
+        {"fade",       CmdId::FadeTime,       kFloat, 10,    "0",   NULL, "Loop",   "Loop and cut crossfade (ms)"},
+        {"reclevel",   CmdId::RecLevel,       kFloat, 1,     "0",   "1",  "Record", "Record level"},
+        {"prelevel",   CmdId::PreLevel,       kFloat, 0,     "0",   "1",  "Record", "Pre level (old material kept)"},
+        {"recpreslew", CmdId::RecPreSlewTime, kFloat, 1,     "0",   NULL, "Record", "Record and pre level slew (ms)"},
+        {"recoffset",  CmdId::RecOffset,      kLong,  -8,    NULL,  NULL, "Record", "Record head offset (samples)"},
+        {"recshape",   CmdId::RecShape,       kShape, 0,     NULL,  NULL, "Record", "Record fade shape (raised inverts polarity)"},
+        {"preshape",   CmdId::PreShape,       kShape, 0,     NULL,  NULL, "Record", "Pre fade shape"},
+        {"softclip",   CmdId::SoftClip,       kFlag,  0,     NULL,  NULL, "Record", "Soft clip the record input (1.2x gain)"},
+        {"prefc",      CmdId::PreFilterFc,    kFloat, 16000, "10",  NULL, "Input filter", "Cutoff (Hz)"},
+        {"prerq",      CmdId::PreFilterRq,    kFloat, 4,     "0.01", NULL, "Input filter", "Reciprocal Q"},
+        {"prelp",      CmdId::PreFilterLp,    kFloat, 0,     "0",   "1",  "Input filter", "Low-pass mix"},
+        {"prehp",      CmdId::PreFilterHp,    kFloat, 0,     "0",   "1",  "Input filter", "High-pass mix"},
+        {"prebp",      CmdId::PreFilterBp,    kFloat, 0,     "0",   "1",  "Input filter", "Band-pass mix"},
+        {"prebr",      CmdId::PreFilterBr,    kFloat, 0,     "0",   "1",  "Input filter", "Band-reject mix"},
+        {"predry",     CmdId::PreFilterDry,   kFloat, 1,     "0",   "1",  "Input filter", "Dry mix"},
+        {"prefcmod",   CmdId::PreFilterFcMod, kFloat, 1,     "0",   "1",  "Input filter", "Cutoff tracking of rate"},
+        {"postfc",     CmdId::PostFilterFc,   kFloat, 12000, "10",  NULL, "Output filter", "Cutoff (Hz)"},
+        {"postrq",     CmdId::PostFilterRq,   kFloat, 4,     "0.01", NULL, "Output filter", "Reciprocal Q"},
+        {"postlp",     CmdId::PostFilterLp,   kFloat, 0,     "0",   "1",  "Output filter", "Low-pass mix"},
+        {"posthp",     CmdId::PostFilterHp,   kFloat, 0,     "0",   "1",  "Output filter", "High-pass mix"},
+        {"postbp",     CmdId::PostFilterBp,   kFloat, 0,     "0",   "1",  "Output filter", "Band-pass mix"},
+        {"postbr",     CmdId::PostFilterBr,   kFloat, 0,     "0",   "1",  "Output filter", "Band-reject mix"},
+        {"postdry",    CmdId::PostFilterDry,  kFloat, 1,     "0",   "1",  "Output filter", "Dry mix"},
     };
-    static const int n = (int)(sizeof(cmds) / sizeof(cmds[0]));
-    if (count) *count = n;
-    return cmds;
+    static_assert(sizeof(p) / sizeof(p[0]) == kNumParams, "update kNumParams");
+    if (count) *count = kNumParams;
+    return p;
 }
 
-// Cache the table's symbols. Idempotent; call once from each ext_main.
-inline void initCommandSymbols() {
-    int n; CmdEntry *t = commandTable(&n);
-    for (int i = 0; i < n; ++i)
-        if (!t[i].sym) t[i].sym = gensym(t[i].name);
+
+// the table's names as symbols, cached on first use
+inline t_symbol *paramSym(int i) {
+    static t_symbol *syms[kNumParams] = {};
+    if (!syms[i]) syms[i] = gensym(params(NULL)[i].name);
+    return syms[i];
 }
 
-// "<voice> <value>": voice counted from 1 -> engine index; value as given
-inline int parseVoiceVal(t_object *owner, t_symbol *s, long argc, t_atom *argv,
-                         int numVoices, long *v, double *val) {
-    if (argc < 2) {
-        object_error(owner, "%s: expected <voice> <value>", s->s_name);
-        return 0;
-    }
-    const long user = atom_getlong(argv);
-    const int  idx  = toIndex(user, numVoices);
-    if (idx < 0) {
-        object_error(owner, "%s: voice %ld out of range [1..%d]", s->s_name, user, numVoices);
-        return 0;
-    }
-    *v = idx; *val = atom_getfloat(argv + 1);
-    return 1;
+inline int paramIndex(t_symbol *s) {
+    for (int i = 0; i < kNumParams; ++i) if (paramSym(i) == s) return i;
+    return -1;
+}
+
+// round integer kinds; flags are 0 or 1
+inline double paramInput(const Param &p, double user) {
+    if (p.kind == kFlag)  return user != 0.0 ? 1.0 : 0.0;
+    if (p.kind != kFloat) return std::round(user);
+    return user;
+}
+
+// inspector decoration and saving, after the attribute itself is added
+inline void decorateParam(t_class *c, const Param &p) {
+    if (p.kind == kFlag)  CLASS_ATTR_STYLE(c, p.name, 0, "onoff");
+    if (p.kind == kShape) CLASS_ATTR_ENUMINDEX3(c, p.name, 0, "linear", "sine", "raised");
+    if (p.min) CLASS_ATTR_MIN(c, p.name, 0, p.min);
+    if (p.max) CLASS_ATTR_MAX(c, p.name, 0, p.max);
+    CLASS_ATTR_LABEL(c, p.name, 0, p.label);
+    CLASS_ATTR_CATEGORY(c, p.name, 0, p.category);
+    CLASS_ATTR_SAVE(c, p.name, 0);
 }
 
 // Convert a message value to engine units and report what the engine will do
@@ -114,145 +125,6 @@ inline bool checkValue(t_object *owner, const char *name, CmdId id, double user,
     return true;
 }
 
-// ---- templated message handlers (engine-only) --------------------------
-template <class Eng>
-void dispatchCmd(Eng *engine, t_object *owner, t_symbol *s, long argc, t_atom *argv) {
-    long v; double val;
-    if (!parseVoiceVal(owner, s, argc, argv, engine->numVoices(), &v, &val)) return;
-    int n; CmdEntry *t = commandTable(&n);
-    for (int i = 0; i < n; ++i) {
-        if (s == t[i].sym) {
-            float f;
-            if (!checkValue(owner, s->s_name, t[i].id, val, engine->getSampleRate(), &f)) return;
-            Command c{t[i].id, (int16_t)v, 0, f};
-            if (!engine->push(c)) object_warn(owner, "%s: command queue full, dropped", s->s_name);
-            return;
-        }
-    }
-    object_error(owner, "%s: unknown command", s->s_name);
-}
-
-// two indices counted from 1 -> engine indices; errors name `what`
-inline int parsePair(t_object *owner, const char *msg, const char *what, t_atom *argv,
-                     int count, int *a, int *b) {
-    *a = toIndex(atom_getlong(argv), count);
-    *b = toIndex(atom_getlong(argv + 1), count);
-    if (*a < 0 || *b < 0) {
-        object_error(owner, "%s: %s out of range [1..%d]", msg, what, count);
-        return 0;
-    }
-    return 1;
-}
-
-template <class Eng>
-void dispatchSync(Eng *engine, t_object *owner, long argc, t_atom *argv) {
-    if (argc < 3) { object_error(owner, "sync: expected <follow> <lead> <offset ms>"); return; }
-    int follow, lead;
-    if (!parsePair(owner, "sync", "voice", argv, engine->numVoices(), &follow, &lead)) return;
-    float off;
-    if (!checkValue(owner, "sync", CmdId::VoiceSync, atom_getfloat(argv + 2),
-                    engine->getSampleRate(), &off)) return;
-    if (!engine->syncVoice(follow, lead, off))
-        object_warn(owner, "sync: command queue full, dropped");
-}
-
-template <class Eng>
-void dispatchStop(Eng *engine, t_object *owner, long argc, t_atom *argv) {
-    if (argc < 1) { object_error(owner, "stop: expected <voice>"); return; }
-    const long user = atom_getlong(argv);
-    const int  v    = toIndex(user, engine->numVoices());
-    if (v < 0) {
-        object_error(owner, "stop: voice %ld out of range [1..%d]", user, engine->numVoices());
-        return;
-    }
-    if (!engine->stopVoice(v)) object_warn(owner, "stop: command queue full, dropped");
-}
-
-template <class Eng>
-void dispatchEnable(Eng *engine, t_object *owner, t_symbol *s, long argc, t_atom *argv) {
-    long v; double val;
-    if (!parseVoiceVal(owner, s, argc, argv, engine->numVoices(), &v, &val)) return;
-    if (!engine->setEnabled((int)v, val > 0.0)) object_warn(owner, "enable: command queue full, dropped");
-}
-
-template <class Eng>
-void dispatchFeedback(Eng *engine, t_object *owner, long argc, t_atom *argv) {
-    if (argc < 3) { object_error(owner, "feedback: expected <src> <dst> <gain>"); return; }
-    int src, dst;
-    if (!parsePair(owner, "feedback", "voice", argv, engine->numVoices(), &src, &dst)) return;
-    float g;
-    if (!checkValue(owner, "feedback", CmdId::FbLevel, atom_getfloat(argv + 2),
-                    engine->getSampleRate(), &g)) return;
-    if (!engine->setFeedback(src, dst, g))
-        object_warn(owner, "feedback: command queue full, dropped");
-}
-
-template <class Eng>
-void dispatchInlevel(Eng *engine, t_object *owner, long argc, t_atom *argv) {
-    if (argc < 3) { object_error(owner, "inlevel: expected <inlet> <voice> <gain>"); return; }
-    int inl, dst;
-    if (!parsePair(owner, "inlevel", "index", argv, engine->numVoices(), &inl, &dst)) return;
-    float g;
-    if (!checkValue(owner, "inlevel", CmdId::InLevel, atom_getfloat(argv + 2),
-                    engine->getSampleRate(), &g)) return;
-    if (!engine->setInLevel(inl, dst, g))
-        object_warn(owner, "inlevel: command queue full, dropped");
-}
-
-// ---- reports (report outlet), shared by both shells ---------------------
-// T provides engine, nvoices and reportout. Voices are reported from 1, times
-// in ms of buffer material.
-
-// `poll`: one `info <voice> <pos 0-1> <play> <rec> <startMs> <endMs> <windowMs>
-// <state> <positionMs>` per voice. positionMs is the play head in the buffer.
-template <class T>
-void reportInfo(T *x) {
-    static t_symbol *ps_info = gensym("info");
-    for (int v = 0; v < x->nvoices; ++v) {
-        const VoiceInfo vi = x->engine->getVoiceInfo(v);
-        t_atom a[9];
-        atom_setlong (a + 0, v + 1);
-        atom_setfloat(a + 1, vi.position);
-        atom_setlong (a + 2, vi.play);
-        atom_setlong (a + 3, vi.rec);
-        atom_setfloat(a + 4, vi.startSec * 1000.0);
-        atom_setfloat(a + 5, vi.endSec * 1000.0);
-        atom_setfloat(a + 6, vi.windowSec * 1000.0);
-        atom_setlong (a + 7, vi.state);
-        atom_setfloat(a + 8, vi.bufferSec * 1000.0);
-        outlet_anything(x->reportout, ps_info, 9, a);
-    }
-}
-
-// report clock: `phase <voice> <ms>` for each voice whose phase changed
-template <class T>
-void reportPhase(T *x) {
-    static t_symbol *ps_phase = gensym("phase");
-    for (int v = 0; v < x->nvoices; ++v) {
-        if (x->engine->checkQuantPhaseChanged(v)) {
-            t_atom a[2];
-            atom_setlong (a + 0, v + 1);
-            atom_setfloat(a + 1, x->engine->getQuantPhase(v) * 1000.0);
-            outlet_anything(x->reportout, ps_phase, 2, a);
-        }
-    }
-}
-
-// @report setter, shared by both shells (each has `report` and `tclock`).
-// Arms or stops the report clock at once; it was otherwise only armed on the
-// next DSP start, so turning reports on while audio ran did nothing.
-template <class T>
-t_max_err reportSet(T *x, void *attr, long argc, t_atom *argv) {
-    if (argc < 1 || !argv) return MAX_ERR_NONE;
-    const long ms = atom_getlong(argv);
-    x->report = ms < 0 ? 0 : ms;
-    if (x->report > 0 && sys_getdspobjdspstate((t_object *)x))
-        clock_delay(x->tclock, x->report);
-    else
-        clock_unset(x->tclock);
-    return MAX_ERR_NONE;
-}
-
 // ---- sync outlets ------------------------------------------------------
 // The engine reports the play head in seconds of buffer material; the sync
 // outlets carry milliseconds, the unit of groove~, play~ and waveform~.
@@ -261,7 +133,8 @@ inline void syncToMs(double *const *sync, int nv, long n) {
         for (long i = 0; i < n; ++i) sync[v][i] *= 1000.0;
 }
 
-// ---- buffer~ association ----------------------------------------------
+
+// ---- buffer~ ---------------------------------------------------------------
 // vchan[v] is the 0-based channel voice v reads, or -1 for the default:
 // voice v reads channel (v mod channel count), as Max's MC players do.
 
@@ -270,57 +143,6 @@ void ensureVbuf(T *x, int v) {
     if (!x->vbufname[v]) return;
     if (!x->vbuf[v]) x->vbuf[v] = buffer_ref_new((t_object *)x, x->vbufname[v]);
     else             buffer_ref_set(x->vbuf[v], x->vbufname[v]);
-}
-
-// Optional 1-based channel argument -> vchan value. Returns 0 on bad input.
-inline int parseChannel(t_object *owner, const char *msg, long argc, t_atom *argv, long *chan) {
-    *chan = -1;
-    if (argc < 1) return 1;
-    const long c = atom_getlong(argv);
-    if (c < 1) { object_error(owner, "%s: channel %ld must be 1 or more", msg, c); return 0; }
-    *chan = c - 1;
-    return 1;
-}
-
-// "set <name> [<chan>]": every voice reads the named buffer~.
-template <class T>
-void setBuffer(T *x, long argc, t_atom *argv) {
-    if (argc < 1 || atom_gettype(argv) != A_SYM) {
-        object_error((t_object *)x, "set: expected <buffer~ name> [<channel>]");
-        return;
-    }
-    long chan;
-    if (!parseChannel((t_object *)x, "set", argc - 1, argv + 1, &chan)) return;
-    t_symbol *name = atom_getsym(argv);
-    for (int v = 0; v < x->nvoices; ++v) {
-        x->vbufname[v] = name;
-        x->vchan[v] = chan;
-        ensureVbuf(x, v);
-    }
-    x->chanWarned = false;
-    if (!buffer_ref_getobject(x->vbuf[0]))
-        object_warn((t_object *)x, "set: no buffer~ named %s", name->s_name);
-}
-
-// "voicebuf <voice> <name> [<chan>]": one voice reads its own buffer~.
-template <class T>
-void setVoiceBuffer(T *x, long argc, t_atom *argv) {
-    if (argc < 2 || atom_gettype(argv + 1) != A_SYM) {
-        object_error((t_object *)x, "voicebuf: expected <voice> <buffer~ name> [<channel>]");
-        return;
-    }
-    const long user = atom_getlong(argv);
-    const int  v    = toIndex(user, (int)x->nvoices);
-    if (v < 0) {
-        object_error((t_object *)x, "voicebuf: voice %ld out of range [1..%ld]", user, x->nvoices);
-        return;
-    }
-    long chan;
-    if (!parseChannel((t_object *)x, "voicebuf", argc - 2, argv + 2, &chan)) return;
-    x->vbufname[v] = atom_getsym(argv + 1);
-    x->vchan[v] = chan;
-    ensureVbuf(x, v);
-    x->chanWarned = false;
 }
 
 // The distinct buffer~s one perform call has locked.

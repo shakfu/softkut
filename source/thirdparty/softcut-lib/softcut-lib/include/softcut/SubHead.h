@@ -32,6 +32,7 @@ namespace softcut {
 
     protected:
         static constexpr int blockSize = 2048;
+        static constexpr float kMaxStored = 32.f;   // softkut patch: +30 dBFS
         sample_t peek();
         //! poke
         //! @param in: input value
@@ -54,11 +55,14 @@ namespace softcut {
         // softkut patch: any length; stride selects one interleaved channel
         void setBuffer(sample_t *buf, unsigned int frames, unsigned int stride = 1);
         void setRate(rate_t rate);
+        // softkut patch: switch the soft clipper on the write path (on by default)
+        void setSoftClip(bool on) { clipOn_ = on; }
         FadeCurves *fadeCurves;
 
     private:
         Resampler resamp_;
         SoftClip clip_;
+        bool clipOn_ = true;   // softkut patch
 
         // NB: these members are default-initialized because softcut relies on
         // zero-initialized static storage on embedded targets. When a Voice is
